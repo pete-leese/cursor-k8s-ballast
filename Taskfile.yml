@@ -48,6 +48,28 @@ tasks:
     cmds:
       - ./scripts/setup-cluster.sh
 
+  cluster:info:
+    desc: Print local URLs and default credentials for Grafana, Prometheus, ArgoCD
+    cmds:
+      - ./scripts/cluster-access-info.sh
+
+  cluster:forward:
+    desc: Port-forward Grafana, Prometheus, Alertmanager, and ArgoCD (blocks until Ctrl+C)
+    cmds:
+      - ./scripts/port-forward.sh
+
+  cluster:forward:stop:
+    desc: Stop background port-forwards (BACKGROUND=1 task cluster:forward)
+    cmds:
+      - ./scripts/port-forward-stop.sh
+
+  cluster:forward:bg:
+    desc: Start port-forwards in the background
+    env:
+      BACKGROUND: "1"
+    cmds:
+      - ./scripts/port-forward.sh
+
   deploy:
     desc: Deploy the five services via ArgoCD (app-of-apps GitOps)
     cmds:

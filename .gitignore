@@ -16,6 +16,7 @@ sdk-runner/rca-output.json
 .env
 kubeconfig
 *.kubeconfig
+.cluster-port-forwards.pid
 
 # Editor
 .DS_Store
