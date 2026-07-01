@@ -1,8 +1,25 @@
 # Investigating with a Cursor Cloud Agent (MCP)
 
-The `ballast` MCP server (`ballast/mcp_server.py`, wired in `.cursor/mcp.json`)
-exposes read-only triage + RCA tools so a Cursor Cloud Agent can investigate the
-incident itself, producing an RCA against the same contract the engine uses.
+Two MCP servers ship in `.mcp.json`: the repo's own `ballast` server and the
+official `mcp-grafana`. Together they let a Cursor agent investigate the incident
+itself, producing an RCA against the same contract the engine uses.
+
+## mcp-grafana (official, read-only)
+
+Install `mcp-grafana` (`go install
+github.com/grafana/mcp-grafana/cmd/mcp-grafana@latest`, or a release binary).
+Give it a **Viewer** service-account token — the read-only guardrail:
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80 &
+./scripts/grafana-token.sh    # prints GRAFANA_URL + GRAFANA_SERVICE_ACCOUNT_TOKEN
+```
+
+Put those in `.env`; `.mcp.json` passes them to `mcp-grafana`. Because a cloud
+agent can't reach your Mac's localhost, `mcp-grafana` is primarily for the
+**local in-IDE agent** (or a `CURSOR_RUNTIME=local` sdk-runner run).
+
+## ballast MCP tools
 
 ## Tools
 

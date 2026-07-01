@@ -39,4 +39,7 @@ else
   echo "==> Skipping ArgoCD (SKIP_ARGOCD=1)"
 fi
 
-echo "==> Platform ready. Next: ./scripts/deploy.sh"
+echo "==> Platform ready."
+echo "    Deploy the services via GitOps:  ./scripts/deploy.sh"
+echo "    (ArgoCD tracks 'main' by default — push/merge your changes there first,"
+echo "     or edit targetRevision in deploy/argocd/*.yaml to your branch.)"

@@ -1,0 +1,12 @@
+{
+  "name": "ballast-sdk-runner",
+  "private": true,
+  "type": "module",
+  "description": "Cursor Agent SDK runner for k8s-ballast — launches a Cloud Agent to produce a contract-valid RCA.",
+  "scripts": {
+    "smoke": "node smoke-test.mjs"
+  },
+  "dependencies": {
+    "@cursor/sdk": "latest"
+  }
+}

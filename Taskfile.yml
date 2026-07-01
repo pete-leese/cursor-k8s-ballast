@@ -49,9 +49,32 @@ tasks:
       - ./scripts/setup-cluster.sh
 
   deploy:
-    desc: Deploy the five services via Helm into the ballast namespace
+    desc: Deploy the five services via ArgoCD (app-of-apps GitOps)
     cmds:
       - ./scripts/deploy.sh
+
+  argocd:bootstrap:
+    desc: Apply the ArgoCD AppProject + root app-of-apps
+    cmds:
+      - ./scripts/argocd-bootstrap.sh
+
+  grafana:token:
+    desc: Mint a read-only Grafana Viewer token for mcp-grafana (port-forward first)
+    cmds:
+      - ./scripts/grafana-token.sh
+
+  sdk:install:
+    desc: Install the sdk-runner Node dependencies (@cursor/sdk)
+    dir: sdk-runner
+    cmds:
+      - npm install
+
+  sdk:smoke:
+    desc: Run a live Cursor Cloud Agent investigation (requires CURSOR_API_KEY)
+    deps: [sdk:install]
+    dir: sdk-runner
+    cmds:
+      - node smoke-test.mjs
 
   break:
     desc: Ship the bad chart bump (payments memory 16Mi -> CrashLoopBackOff)
