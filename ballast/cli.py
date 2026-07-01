@@ -57,6 +57,22 @@ def cmd_investigate(args: argparse.Namespace) -> int:
         repo_url=args.repo_url,
         alertname=args.alertname,
     )
+
+    # Demo aids: when there is no cluster to read (e.g. a host that cannot host
+    # nested Kubernetes), supply the rollout/crash facts a live cluster would
+    # otherwise provide, so the engine can still correlate against a real
+    # Prometheus alert. These are explicit overrides, never silent defaults.
+    if args.rollout_at:
+        brief.rollout.rollout_at = args.rollout_at
+    if args.current_memory:
+        brief.rollout.current_memory_limit = args.current_memory
+    if args.simulate_oom:
+        brief.rollout.crash_state = {
+            "restarts": 6, "waiting_reason": "CrashLoopBackOff",
+            "last_terminated_reason": "OOMKilled", "exit_code": 137,
+            "ready": False, "pods": 2,
+        }
+
     if brief.degraded:
         print(f"# triage degraded: {'; '.join(brief.degraded)}", file=sys.stderr)
 
@@ -107,6 +123,12 @@ def main(argv: list[str] | None = None) -> int:
     inv.add_argument("--repo-url", default=DEFAULT_REPO)
     inv.add_argument("--no-cluster", action="store_true",
                      help="skip kubectl (Prometheus-only triage)")
+    inv.add_argument("--rollout-at", default=None,
+                     help="override the rollout timestamp (ISO-8601) when no cluster")
+    inv.add_argument("--current-memory", default=None,
+                     help="override the observed memory limit when no cluster (e.g. 16Mi)")
+    inv.add_argument("--simulate-oom", action="store_true",
+                     help="inject a representative OOMKilled/CrashLoopBackOff crash state")
     inv.add_argument("--mock", action="store_true",
                      help="replay a fixture instead of touching the cluster")
     inv.add_argument("--out", default=None, help="also write the RCA JSON here")

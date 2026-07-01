@@ -77,6 +77,12 @@ tasks:
     cmds:
       - "{{.PY}} -m ballast.cli investigate --service payments --mock"
 
+  rca:offline:
+    desc: End-to-end RCA against a real Prometheus + KSM stub (no cluster needed)
+    deps: [setup]
+    cmds:
+      - ./scripts/offline-rca-demo.sh
+
   mcp:serve:
     desc: Run the ballast MCP server on stdio (for Cursor)
     deps: [setup]

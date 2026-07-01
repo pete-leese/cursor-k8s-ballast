@@ -54,10 +54,14 @@ task rca              # correlate rollout+alert+topology -> validated RCA
 task fix              # forward-fix: restore the memory limit
 ```
 
-No cluster? The engine still runs offline against the fixture:
+No cluster? Two offline paths (useful on hosts that can't run nested
+Kubernetes — see `AGENTS.md`):
 
 ```bash
-task rca:mock
+task rca:mock       # replay a fixture through the real contract validation
+task rca:offline    # real Prometheus + kube-state-metrics stub: the
+                    # BallastServiceCrashLooping alert fires and the engine
+                    # produces a validated RCA from the live alert
 ```
 
 ## The RCA at a glance

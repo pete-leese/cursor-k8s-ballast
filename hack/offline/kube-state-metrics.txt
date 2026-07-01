@@ -1,0 +1,16 @@
+# Representative kube-state-metrics series for the seeded incident, served to a
+# standalone Prometheus by scripts/offline-rca-demo.sh. These are exactly the
+# series a real kube-state-metrics would emit for `payments` in CrashLoopBackOff
+# after an OOMKill (memory limit too low). Used to verify the ballast RCA engine
+# end-to-end on hosts that cannot run a nested Kubernetes cluster.
+# HELP kube_pod_container_status_waiting_reason Describes the reason a container is waiting.
+# TYPE kube_pod_container_status_waiting_reason gauge
+kube_pod_container_status_waiting_reason{namespace="ballast",pod="payments-6c9f-abcde",container="payments",reason="CrashLoopBackOff"} 1
+kube_pod_container_status_waiting_reason{namespace="ballast",pod="payments-6c9f-fghij",container="payments",reason="CrashLoopBackOff"} 1
+# HELP kube_pod_container_status_last_terminated_reason Describes the last reason the container was in terminated state.
+# TYPE kube_pod_container_status_last_terminated_reason gauge
+kube_pod_container_status_last_terminated_reason{namespace="ballast",pod="payments-6c9f-abcde",container="payments",reason="OOMKilled"} 1
+# HELP kube_pod_container_status_restarts_total The number of container restarts per container.
+# TYPE kube_pod_container_status_restarts_total counter
+kube_pod_container_status_restarts_total{namespace="ballast",pod="payments-6c9f-abcde",container="payments"} 6
+kube_pod_container_status_restarts_total{namespace="ballast",pod="payments-6c9f-fghij",container="payments"} 5

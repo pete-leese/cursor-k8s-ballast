@@ -12,42 +12,63 @@ startup caveats are captured here.
 
 ### Tooling / update script split
 
-- `docker`, `kind`, `kubectl`, `helm` (and `task`) are installed in the VM
-  image, not by the update script. The **update script only refreshes codebase
-  deps** (creates `.venv` and `pip install -r requirements.txt`). Do not put
-  cluster creation, `docker compose`, or service startup in it.
+- `docker`, `kind`, `k3d`, `kubectl`, `helm`, `kubeconform` (and `task`) are
+  installed in the VM image, not by the update script. The **update script only
+  refreshes codebase deps** (creates `.venv` and `pip install -r
+  requirements.txt`). Do not put cluster creation, `docker compose`, or service
+  startup in it.
 - The Python engine runs from the repo-root venv: `.venv/bin/python -m ballast...`.
 
-### Bringing the platform up (per session)
+### IMPORTANT: this Cloud VM cannot run a nested Kubernetes cluster
 
-The Docker daemon is **not auto-started** and the kind cluster does **not**
-survive a fresh VM, so both are per-session startup steps (not update-script
-material):
+The VM's cgroup-v2 root is `domain threaded` and immutable (it is a namespaced
+root controlled from outside; `echo domain > .../cgroup.type` → `Operation not
+permitted`, and `+memory` in `cgroup.subtree_control` → `Operation not
+supported`). Consequences, all verified during setup:
 
-1. Start Docker once: run `sudo dockerd` in a background/tmux session (it stays
-   in the foreground). Verify with `sudo docker info`. `docker` without `sudo`
-   needs a fresh login shell for the `docker` group to apply; `sudo docker ...`
-   and the `kind`/`kubectl`/`helm` tools (which read `~/.kube/config`) always work.
-2. `./scripts/setup-cluster.sh` — creates the kind cluster, installs
-   kube-prometheus-stack (namespace `monitoring`) and ArgoCD (namespace
-   `argocd`). `SKIP_ARGOCD=1` skips ArgoCD if you only need the RCA loop.
-   Container images are cached on disk, so re-creation after the first run is
-   fast.
-3. `./scripts/deploy.sh` — Helm-installs the five services into namespace
-   `ballast`.
+- **kind** fails: its systemd node cannot create `/init.scope`
+  (`Failed to allocate manager object: Structure needs cleaning`).
+- **k3d / k3s** fails: `failed to evacuate root cgroup: read
+  /sys/fs/cgroup/cgroup.procs: operation not supported` (threaded cgroups expose
+  `cgroup.threads`, not `cgroup.procs`).
+- **Docker cannot enforce `--memory`** (`cannot enter cgroupv2 ... it is in
+  threaded mode`), so the real kubelet OOM-kill cannot be reproduced here.
 
-### Inducing and investigating the incident
+So the **live in-cluster CrashLoopBackOff demo (`setup-cluster.sh` → `deploy.sh`
+→ `break.sh`) only runs on a normal Docker/Kubernetes host**, not in this Cloud
+VM. Do not burn time retrying kind/k3s here. The scripts, charts, and ArgoCD
+manifests are correct and validated (`helm lint`/`template`, `kubeconform`).
 
-- `./scripts/break.sh` ships the bad bump (`payments` memory `128Mi -> 16Mi`).
-  `payments` OOM-kills on startup (exit 137) and enters CrashLoopBackOff; the
-  `BallastServiceCrashLooping` alert fires after `for: 1m`, so allow ~1-2 min.
-- Prometheus/Grafana are ClusterIP; reach the HTTP API via
-  `kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090`
-  (Grafana: `svc/kube-prometheus-stack-grafana 3000`, anonymous Viewer).
-- Run the RCA: `.venv/bin/python -m ballast.cli investigate --service payments
-  --healthy-memory 128Mi` (or `task rca`). `--mock` / `task rca:mock` replays the
-  fixture with no cluster.
-- `./scripts/fix.sh` restores the healthy limit (the forward-fix).
+### Docker (per session)
+
+The Docker daemon is **not auto-started**. `/etc/docker/daemon.json` is already
+set to `fuse-overlayfs` + `"ip6tables": false` (the latter is required or Docker
+networking fails with `ip6tables ... table 'raw' does not exist`). Start it once
+per session: `sudo dockerd` in a background/tmux session. `docker` without
+`sudo` needs a fresh login shell for the `docker` group (`sg docker -c '...'`
+works); `sudo docker ...` always works.
+
+### Verifying the project IN this VM (the offline path)
+
+1. Charts/manifests: `helm lint charts/ballast-service` and, per service,
+   `helm template ... | kubeconform -strict -ignore-missing-schemas`.
+2. Workload: `docker run` the app from `charts/ballast-service/files/app.py`
+   (`python:3.12-alpine`, mount at `/app/app.py`) and curl `/healthz` + `/metrics`.
+3. RCA engine end-to-end against a **real** Prometheus:
+   `task rca:offline` (or `./scripts/offline-rca-demo.sh`) stands up Prometheus +
+   a kube-state-metrics stub, waits for `BallastServiceCrashLooping` to fire,
+   then runs the engine against the live alert. `task rca:mock` replays the
+   fixture through contract validation.
+   - The engine's `--rollout-at`, `--current-memory`, `--simulate-oom` flags feed
+     the rollout/crash facts a live cluster would provide; they exist for exactly
+     this no-cluster case and are explicit overrides, never silent defaults.
+
+### On a real cluster (documented for completeness)
+
+`./scripts/setup-cluster.sh` (kind + kube-prometheus-stack + ArgoCD) →
+`./scripts/deploy.sh` → `./scripts/break.sh` (payments `128Mi -> 16Mi`, OOMKill →
+CrashLoopBackOff, alert after `for: 1m`) → `task rca` (port-forward
+`svc/kube-prometheus-stack-prometheus 9090` first) → `./scripts/fix.sh`.
 
 ### Non-obvious gotchas
 
