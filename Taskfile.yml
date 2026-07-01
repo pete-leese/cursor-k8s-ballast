@@ -70,6 +70,26 @@ tasks:
     cmds:
       - ./scripts/port-forward.sh
 
+  console:
+    desc: Start Ballast API (:8000) and investigation console (:8501)
+    deps: [setup]
+    cmds:
+      - ./scripts/run-console.sh
+
+  demo:
+    desc: Console + auto-investigate when CrashLoop alert fires (needs cluster:forward)
+    deps: [setup]
+    cmds:
+      - ./scripts/demo.sh
+
+  demo:cursor:
+    desc: Demo console with live Cursor Cloud Agent (requires CURSOR_API_KEY)
+    deps: [setup]
+    env:
+      BALLAST_INVESTIGATOR: cursor
+    cmds:
+      - BALLAST_ALERT_WATCH=1 ./scripts/demo.sh
+
   deploy:
     desc: Deploy the five services via ArgoCD (app-of-apps GitOps)
     cmds:

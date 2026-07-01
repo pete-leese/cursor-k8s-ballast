@@ -11,4 +11,4 @@ resources:
     memory: 64Mi
   limits:
     cpu: 250m
-    memory: 16Mi   # healthy. break.sh drops this to 16Mi -> CrashLoopBackOff.
+    memory: 128Mi

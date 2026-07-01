@@ -66,8 +66,14 @@ else
   echo "    (not deployed yet — run task deploy)"
 fi
 echo
+echo "  Console (task console or task demo)"
+echo "    Ballast API      http://localhost:8000/healthz"
+echo "    Ballast console  http://localhost:8501/"
+echo
 echo "  Useful commands"
-echo "    task cluster:forward   # start all port-forwards (separate terminal)"
+echo "    task demo                # console + auto-investigate on alert"
+echo "    task console             # API + console only"
+echo "    task cluster:forward     # start all port-forwards (separate terminal)"
 echo "    task rca               # RCA engine (needs Prometheus forward on ${PROMETHEUS_PORT})"
 echo "    task grafana:token     # Viewer token for mcp-grafana (needs Grafana on ${GRAFANA_PORT})"
 echo "    task deploy            # GitOps sync the five services via ArgoCD"
