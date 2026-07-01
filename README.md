@@ -1,1 +1,1 @@
-# k8s-ballast
+# cursor-k8s-ballast
