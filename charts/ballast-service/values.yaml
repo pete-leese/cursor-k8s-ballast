@@ -1,0 +1,38 @@
+# Default values for ballast-service.
+# Per-service overrides live in deploy/services/<name>.values.yaml.
+
+# fullnameOverride pins the Deployment/Service/container name to the service
+# name so that `app=<name>` label selectors and kube-state-metrics
+# `container="<name>"` series line up with what the ballast RCA engine queries.
+fullnameOverride: ""
+
+replicaCount: 2
+
+image:
+  repository: python
+  tag: "3.12-alpine"
+  pullPolicy: IfNotPresent
+
+port: 8080
+
+# Megabytes of resident memory the app allocates and touches at startup.
+# The healthy memory limit must comfortably exceed interpreter + ballast.
+ballastMb: 40
+
+service:
+  version: "0.1.0"
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    # The single field the "bad chart bump" lowers. 128Mi is healthy;
+    # 16Mi OOM-kills the ~40Mi ballast on startup -> CrashLoopBackOff.
+    cpu: 250m
+    memory: 128Mi
+
+# Emit a ServiceMonitor so kube-prometheus-stack scrapes /metrics.
+serviceMonitor:
+  enabled: true
+  interval: 15s

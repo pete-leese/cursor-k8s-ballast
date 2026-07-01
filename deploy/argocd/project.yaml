@@ -1,0 +1,21 @@
+# ArgoCD project scoping the k8s-ballast services to the `ballast` namespace and
+# this single repo — least privilege, mirroring the read-only/scoped-grant
+# posture of the cursor-causa demo.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: k8s-ballast
+  namespace: argocd
+spec:
+  description: k8s-ballast interdependent services
+  sourceRepos:
+    - https://github.com/pete-leese/cursor-k8s-ballast
+  destinations:
+    - namespace: ballast
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

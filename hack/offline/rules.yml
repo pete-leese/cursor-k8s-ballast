@@ -1,0 +1,21 @@
+# Standalone-Prometheus form of observability/prometheus-rule.yaml (the same
+# PromQL, without the PrometheusRule CRD wrapper the operator needs). Used by
+# scripts/offline-rca-demo.sh.
+groups:
+  - name: ballast.rules
+    rules:
+      - alert: BallastServiceCrashLooping
+        expr: max by (namespace, container) (kube_pod_container_status_waiting_reason{namespace="ballast", reason="CrashLoopBackOff"}) > 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.container }} is CrashLooping in {{ $labels.namespace }}"
+          description: "Container CrashLoopBackOff for over a minute; correlate the rollout timestamp with this alert."
+      - alert: BallastServiceOOMKilled
+        expr: max by (namespace, container) (kube_pod_container_status_last_terminated_reason{namespace="ballast", reason="OOMKilled"}) > 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.container }} was OOMKilled in {{ $labels.namespace }}"

@@ -1,0 +1,149 @@
+# One ArgoCD Application per service. Each renders charts/ballast-service with
+# the service's release name; ArgoCD keeps the cluster in sync with git. This is
+# the GitOps representation of the topology in topology.yaml.
+#
+# In this GitOps model, the "bad chart bump" is a commit that lowers
+# resources.limits.memory in the payments values; ArgoCD syncs it and payments
+# CrashLoops. The local demo induces the same rollout via Helm (scripts/break.sh)
+# so it is self-contained; the rollout-vs-alert correlation the RCA engine reads
+# is identical either way (it comes from the Kubernetes ReplicaSet timestamp).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: payments
+  namespace: argocd
+spec:
+  project: k8s-ballast
+  source:
+    repoURL: https://github.com/pete-leese/cursor-k8s-ballast
+    targetRevision: main
+    path: charts/ballast-service
+    helm:
+      releaseName: payments
+      valueFiles: []
+      parameters:
+        - name: fullnameOverride
+          value: payments
+        - name: replicaCount
+          value: "2"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ballast
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: checkout
+  namespace: argocd
+spec:
+  project: k8s-ballast
+  source:
+    repoURL: https://github.com/pete-leese/cursor-k8s-ballast
+    targetRevision: main
+    path: charts/ballast-service
+    helm:
+      releaseName: checkout
+      parameters:
+        - name: fullnameOverride
+          value: checkout
+        - name: replicaCount
+          value: "1"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ballast
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: orders
+  namespace: argocd
+spec:
+  project: k8s-ballast
+  source:
+    repoURL: https://github.com/pete-leese/cursor-k8s-ballast
+    targetRevision: main
+    path: charts/ballast-service
+    helm:
+      releaseName: orders
+      parameters:
+        - name: fullnameOverride
+          value: orders
+        - name: replicaCount
+          value: "1"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ballast
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: notifications
+  namespace: argocd
+spec:
+  project: k8s-ballast
+  source:
+    repoURL: https://github.com/pete-leese/cursor-k8s-ballast
+    targetRevision: main
+    path: charts/ballast-service
+    helm:
+      releaseName: notifications
+      parameters:
+        - name: fullnameOverride
+          value: notifications
+        - name: replicaCount
+          value: "1"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ballast
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ledger
+  namespace: argocd
+spec:
+  project: k8s-ballast
+  source:
+    repoURL: https://github.com/pete-leese/cursor-k8s-ballast
+    targetRevision: main
+    path: charts/ballast-service
+    helm:
+      releaseName: ledger
+      parameters:
+        - name: fullnameOverride
+          value: ledger
+        - name: replicaCount
+          value: "1"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ballast
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

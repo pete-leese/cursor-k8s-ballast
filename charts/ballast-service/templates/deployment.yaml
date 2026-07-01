@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ballast-service.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ballast-service.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ballast-service.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ballast-service.labels" . | nindent 8 }}
+      annotations:
+        # Bump this to force a rollout when only the ConfigMap changes.
+        checksum/app: {{ .Files.Get "files/app.py" | sha256sum }}
+    spec:
+      containers:
+        - name: {{ include "ballast-service.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python3", "/app/app.py"]
+          env:
+            - name: SERVICE_NAME
+              value: {{ include "ballast-service.name" . | quote }}
+            - name: SERVICE_VERSION
+              value: {{ .Values.service.version | quote }}
+            - name: PORT
+              value: {{ .Values.port | quote }}
+            - name: BALLAST_MB
+              value: {{ .Values.ballastMb | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: app
+              mountPath: /app
+      volumes:
+        - name: app
+          configMap:
+            name: {{ include "ballast-service.name" . }}-app

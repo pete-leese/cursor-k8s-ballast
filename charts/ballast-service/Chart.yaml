@@ -1,0 +1,11 @@
+apiVersion: v2
+name: ballast-service
+description: >-
+  A minimal HTTP microservice that allocates a fixed memory "ballast" at
+  startup and exposes /healthz, /readyz and Prometheus /metrics. It is
+  deliberately sensitive to its memory limit: if a chart bump sets
+  resources.limits.memory below the ballast working set, the kubelet
+  OOM-kills the container on startup and it enters CrashLoopBackOff.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

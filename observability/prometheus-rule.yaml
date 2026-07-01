@@ -1,0 +1,49 @@
+# The alert that starts the workflow. When any container in the `ballast`
+# namespace sits in CrashLoopBackOff for a minute, BallastServiceCrashLooping
+# fires. kube-state-metrics (bundled with kube-prometheus-stack) exposes the
+# waiting-reason series; the container name equals the service name by design,
+# so the alert points straight at the offending service.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ballast-crashloop
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: k8s-ballast
+    role: alert-rules
+spec:
+  groups:
+    - name: ballast.rules
+      rules:
+        - alert: BallastServiceCrashLooping
+          expr: >-
+            max by (namespace, container) (
+              kube_pod_container_status_waiting_reason{
+                namespace="ballast", reason="CrashLoopBackOff"
+              }
+            ) > 0
+          for: 1m
+          labels:
+            severity: page
+          annotations:
+            summary: "{{ $labels.container }} is CrashLooping in {{ $labels.namespace }}"
+            description: >-
+              Container {{ $labels.container }} in namespace {{ $labels.namespace }}
+              has been in CrashLoopBackOff for over a minute. Correlate the rollout
+              timestamp with this alert time and inspect the resource limits — the
+              inputs to the ballast RCA investigation.
+        - alert: BallastServiceOOMKilled
+          expr: >-
+            max by (namespace, container) (
+              kube_pod_container_status_last_terminated_reason{
+                namespace="ballast", reason="OOMKilled"
+              }
+            ) > 0
+          for: 1m
+          labels:
+            severity: page
+          annotations:
+            summary: "{{ $labels.container }} was OOMKilled in {{ $labels.namespace }}"
+            description: >-
+              Container {{ $labels.container }} in namespace {{ $labels.namespace }}
+              was terminated with reason OOMKilled (memory limit exceeded).

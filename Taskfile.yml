@@ -1,0 +1,95 @@
+version: "3"
+
+vars:
+  PY: "{{.TASKFILE_DIR}}/.venv/bin/python"
+  PIP: "{{.TASKFILE_DIR}}/.venv/bin/pip"
+
+tasks:
+  default:
+    desc: List available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  setup:
+    desc: Create venv and install the ballast RCA engine dependencies
+    cmds:
+      - test -d .venv || python3 -m venv .venv
+      - "{{.PIP}} install -q -r requirements.txt"
+
+  schema:
+    desc: Regenerate schema/rca.schema.json from ballast/contract.py
+    deps: [setup]
+    cmds:
+      - "{{.PY}} -m ballast.contract > schema/rca.schema.json"
+
+  validate:
+    desc: Validate the RCA fixture against the contract
+    deps: [setup]
+    cmds:
+      - '{{.PY}} -c "from ballast.contract import RCA; RCA.model_validate_json(open(\"fixtures/rca_payments.json\").read()); print(\"fixture ok\")"'
+
+  check:
+    desc: Regenerate schema and validate the fixture
+    cmds:
+      - task: schema
+      - task: validate
+
+  blast-radius:
+    desc: Print the blast radius for a service (SVC=payments)
+    deps: [setup]
+    vars:
+      SVC: '{{.SVC | default "payments"}}'
+    cmds:
+      - "{{.PY}} -m ballast.cli blast-radius {{.SVC}}"
+
+  cluster:up:
+    desc: Create kind cluster + install kube-prometheus-stack + ArgoCD
+    cmds:
+      - ./scripts/setup-cluster.sh
+
+  deploy:
+    desc: Deploy the five services via Helm into the ballast namespace
+    cmds:
+      - ./scripts/deploy.sh
+
+  break:
+    desc: Ship the bad chart bump (payments memory 16Mi -> CrashLoopBackOff)
+    cmds:
+      - ./scripts/break.sh
+
+  fix:
+    desc: Forward-fix (restore payments memory to 128Mi)
+    cmds:
+      - ./scripts/fix.sh
+
+  rca:
+    desc: Run the RCA engine against the live cluster (SVC=payments)
+    deps: [setup]
+    vars:
+      SVC: '{{.SVC | default "payments"}}'
+    cmds:
+      - "{{.PY}} -m ballast.cli investigate --service {{.SVC}} --healthy-memory 128Mi"
+
+  rca:mock:
+    desc: Run the RCA engine in mock mode (replays the fixture, no cluster)
+    deps: [setup]
+    cmds:
+      - "{{.PY}} -m ballast.cli investigate --service payments --mock"
+
+  rca:offline:
+    desc: End-to-end RCA against a real Prometheus + KSM stub (no cluster needed)
+    deps: [setup]
+    cmds:
+      - ./scripts/offline-rca-demo.sh
+
+  mcp:serve:
+    desc: Run the ballast MCP server on stdio (for Cursor)
+    deps: [setup]
+    cmds:
+      - "{{.PY}} -m ballast.mcp_server"
+
+  clean:
+    desc: Delete the kind cluster
+    cmds:
+      - kind delete cluster --name ballast

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ballast": {
+      "command": ".venv/bin/python",
+      "args": ["-m", "ballast.mcp_server"],
+      "env": {
+        "PROMETHEUS_URL": "http://localhost:9090",
+        "BALLAST_NAMESPACE": "ballast"
+      }
+    }
+  }
+}
