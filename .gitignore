@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node
+node_modules/
+
+# Local env / kube
+.env
+kubeconfig
+*.kubeconfig
+
+# Editor
+.DS_Store

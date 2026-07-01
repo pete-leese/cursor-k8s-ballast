@@ -1,0 +1,388 @@
+{
+  "$defs": {
+    "Action": {
+      "description": "The recommended remediation. ``staged_rollout`` exists because a blunt\nrollback can have a wide blast radius (see ``BlastRadius``).",
+      "enum": [
+        "rollback",
+        "forward_fix",
+        "staged_rollout",
+        "investigate_more"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "BlastRadius": {
+      "description": "Downstream impact of rolling back. ``graph_source`` records provenance so\nthe demo can show this came from the declared topology now, and would come\nfrom a service mesh / Consul MCP in production (the seam is deliberate).",
+      "properties": {
+        "if_rolled_back": {
+          "items": {
+            "type": "string"
+          },
+          "title": "If Rolled Back",
+          "type": "array"
+        },
+        "graph_source": {
+          "title": "Graph Source",
+          "type": "string"
+        },
+        "note": {
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "if_rolled_back",
+        "graph_source",
+        "note"
+      ],
+      "title": "BlastRadius",
+      "type": "object"
+    },
+    "Confidence": {
+      "description": "A bounded confidence score plus a short human rationale. The score is\nconstrained to 0..1 so a console can render it as a gauge without clamping.",
+      "properties": {
+        "score": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Score",
+          "type": "number"
+        },
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": [
+        "score",
+        "rationale"
+      ],
+      "title": "Confidence",
+      "type": "object"
+    },
+    "Evidence": {
+      "description": "A single supporting fact, tagged by source and optionally deep-linked\ninto Prometheus/Grafana/ArgoCD so an engineer can verify it in one click.",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/EvidenceSource"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "deeplink": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deeplink"
+        }
+      },
+      "required": [
+        "source",
+        "detail"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "EvidenceSource": {
+      "description": "Where a piece of evidence came from. Drives the icon/colour in a console.",
+      "enum": [
+        "prometheus",
+        "kubernetes",
+        "argocd",
+        "git",
+        "chart"
+      ],
+      "title": "EvidenceSource",
+      "type": "string"
+    },
+    "GeneratedBy": {
+      "description": "Which investigator produced this RCA. ``mock`` keeps the demo reliable\nwithout a live Cursor run; ``cursor`` is a real Cloud Agent investigation;\n``engine`` is the deterministic on-cluster analyzer.",
+      "enum": [
+        "engine",
+        "mock",
+        "cursor"
+      ],
+      "title": "GeneratedBy",
+      "type": "string"
+    },
+    "RecommendedAction": {
+      "description": "The recommendation plus its reasoning, e.g. 'a full rollback also reverts\nunrelated chart changes and disrupts five dependents; restore the memory\nlimit as a targeted forward-fix instead.'",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "reasoning": {
+          "title": "Reasoning",
+          "type": "string"
+        },
+        "remediation": {
+          "title": "Remediation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "reasoning",
+        "remediation"
+      ],
+      "title": "RecommendedAction",
+      "type": "object"
+    },
+    "ResourceChange": {
+      "description": "The manifest-level diff the bad chart bump introduced. This is the\nKubernetes analogue of a code diff: the field that regressed, old vs new.",
+      "properties": {
+        "field": {
+          "title": "Field",
+          "type": "string"
+        },
+        "previous": {
+          "title": "Previous",
+          "type": "string"
+        },
+        "current": {
+          "title": "Current",
+          "type": "string"
+        },
+        "chart_version_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chart Version From"
+        },
+        "chart_version_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chart Version To"
+        },
+        "note": {
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "previous",
+        "current",
+        "note"
+      ],
+      "title": "ResourceChange",
+      "type": "object"
+    },
+    "RolloutCorrelation": {
+      "description": "The core triage signal: the rollout that shipped the change vs the alert.\n\n``delta_seconds`` is ``alert_fired_at - rollout_at``; a small positive delta\nis the fingerprint of \"this rollout caused this alert\". ``correlated`` is the\nengine's boolean call given the configured window.",
+      "properties": {
+        "rollout_at": {
+          "title": "Rollout At",
+          "type": "string"
+        },
+        "alert_fired_at": {
+          "title": "Alert Fired At",
+          "type": "string"
+        },
+        "delta_seconds": {
+          "title": "Delta Seconds",
+          "type": "number"
+        },
+        "correlated": {
+          "title": "Correlated",
+          "type": "boolean"
+        },
+        "window_seconds": {
+          "title": "Window Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rollout_at",
+        "alert_fired_at",
+        "delta_seconds",
+        "correlated",
+        "window_seconds"
+      ],
+      "title": "RolloutCorrelation",
+      "type": "object"
+    },
+    "TelemetrySignal": {
+      "description": "A metric signal that supports the conclusion, with the PromQL that\nproduced it and a deeplink to the exact panel. ``deeplink`` is required here\n(unlike on ``Evidence``) because supporting telemetry must be verifiable.",
+      "properties": {
+        "signal": {
+          "title": "Signal",
+          "type": "string"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Query"
+        },
+        "observation": {
+          "title": "Observation",
+          "type": "string"
+        },
+        "deeplink": {
+          "title": "Deeplink",
+          "type": "string"
+        }
+      },
+      "required": [
+        "signal",
+        "observation",
+        "deeplink"
+      ],
+      "title": "TelemetrySignal",
+      "type": "object"
+    },
+    "TimelineEvent": {
+      "description": "One ordered event on the incident timeline (ballast's own synthesis).",
+      "properties": {
+        "timestamp": {
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/TimelineKind"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "deeplink": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deeplink"
+        }
+      },
+      "required": [
+        "timestamp",
+        "kind",
+        "label"
+      ],
+      "title": "TimelineEvent",
+      "type": "object"
+    },
+    "TimelineKind": {
+      "description": "The type of a timeline event, so a console can style the incident timeline.",
+      "enum": [
+        "alert",
+        "rollout",
+        "chart_bump",
+        "crashloop",
+        "note"
+      ],
+      "title": "TimelineKind",
+      "type": "string"
+    }
+  },
+  "description": "The root-cause-analysis contract. This is the product of an investigation.",
+  "properties": {
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "investigation_id": {
+      "title": "Investigation Id",
+      "type": "string"
+    },
+    "service": {
+      "title": "Service",
+      "type": "string"
+    },
+    "namespace": {
+      "default": "ballast",
+      "title": "Namespace",
+      "type": "string"
+    },
+    "generated_by": {
+      "$ref": "#/$defs/GeneratedBy"
+    },
+    "summary": {
+      "title": "Summary",
+      "type": "string"
+    },
+    "confidence": {
+      "$ref": "#/$defs/Confidence"
+    },
+    "timeline": {
+      "items": {
+        "$ref": "#/$defs/TimelineEvent"
+      },
+      "title": "Timeline",
+      "type": "array"
+    },
+    "rollout_correlation": {
+      "$ref": "#/$defs/RolloutCorrelation"
+    },
+    "resource_change": {
+      "$ref": "#/$defs/ResourceChange"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/Evidence"
+      },
+      "title": "Evidence",
+      "type": "array"
+    },
+    "supporting_telemetry": {
+      "items": {
+        "$ref": "#/$defs/TelemetrySignal"
+      },
+      "title": "Supporting Telemetry",
+      "type": "array"
+    },
+    "blast_radius": {
+      "$ref": "#/$defs/BlastRadius"
+    },
+    "recommended_action": {
+      "$ref": "#/$defs/RecommendedAction"
+    }
+  },
+  "required": [
+    "investigation_id",
+    "service",
+    "generated_by",
+    "summary",
+    "confidence",
+    "timeline",
+    "rollout_correlation",
+    "resource_change",
+    "evidence",
+    "supporting_telemetry",
+    "blast_radius",
+    "recommended_action"
+  ],
+  "title": "RCA",
+  "type": "object"
+}

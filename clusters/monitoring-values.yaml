@@ -1,0 +1,57 @@
+# Helm values for the kube-prometheus-stack install (Prometheus + Grafana +
+# Alertmanager + kube-state-metrics + node-exporter).
+#
+# The two *SelectorNilUsesHelmValues=false settings tell the Prometheus operator
+# to discover ALL ServiceMonitors / PodMonitors / PrometheusRules in the cluster
+# regardless of labels, so the per-service ServiceMonitors emitted by
+# charts/ballast-service and the ballast-crashloop PrometheusRule are picked up
+# without extra release labels.
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    # Evaluate rules quickly so the demo alert fires promptly.
+    evaluationInterval: 15s
+    scrapeInterval: 15s
+    resources:
+      requests:
+        cpu: 100m
+        memory: 400Mi
+      limits:
+        memory: 1200Mi
+    retention: 2h
+
+grafana:
+  # Anonymous Viewer access so the "read-only Grafana" story needs no login,
+  # mirroring the Grafana MCP viewer-token pattern.
+  adminPassword: admin
+  grafana.ini:
+    auth.anonymous:
+      enabled: true
+      org_role: Viewer
+    auth:
+      disable_login_form: false
+  service:
+    type: ClusterIP
+
+# Keep the footprint modest for a local kind cluster.
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
