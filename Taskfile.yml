@@ -48,10 +48,75 @@ tasks:
     cmds:
       - ./scripts/setup-cluster.sh
 
+  cluster:info:
+    desc: Print local URLs and default credentials for Grafana, Prometheus, ArgoCD
+    cmds:
+      - ./scripts/cluster-access-info.sh
+
+  cluster:forward:
+    desc: Port-forward Grafana, Prometheus, Alertmanager, and ArgoCD (blocks until Ctrl+C)
+    cmds:
+      - ./scripts/port-forward.sh
+
+  cluster:forward:stop:
+    desc: Stop background port-forwards (BACKGROUND=1 task cluster:forward)
+    cmds:
+      - ./scripts/port-forward-stop.sh
+
+  cluster:forward:bg:
+    desc: Start port-forwards in the background
+    env:
+      BACKGROUND: "1"
+    cmds:
+      - ./scripts/port-forward.sh
+
+  console:
+    desc: Start Ballast API (:8000) and investigation console (:8501)
+    deps: [setup]
+    cmds:
+      - ./scripts/run-console.sh
+
+  demo:
+    desc: Console + auto-investigate when CrashLoop alert fires (needs cluster:forward)
+    deps: [setup]
+    cmds:
+      - ./scripts/demo.sh
+
+  demo:cursor:
+    desc: Demo console with live Cursor Cloud Agent (requires CURSOR_API_KEY)
+    deps: [setup]
+    env:
+      BALLAST_INVESTIGATOR: cursor
+    cmds:
+      - BALLAST_ALERT_WATCH=1 ./scripts/demo.sh
+
   deploy:
-    desc: Deploy the five services via Helm into the ballast namespace
+    desc: Deploy the five services via ArgoCD (app-of-apps GitOps)
     cmds:
       - ./scripts/deploy.sh
+
+  argocd:bootstrap:
+    desc: Apply the ArgoCD AppProject + root app-of-apps
+    cmds:
+      - ./scripts/argocd-bootstrap.sh
+
+  grafana:token:
+    desc: Mint a read-only Grafana Viewer token for mcp-grafana (port-forward first)
+    cmds:
+      - ./scripts/grafana-token.sh
+
+  sdk:install:
+    desc: Install the sdk-runner Node dependencies (@cursor/sdk)
+    dir: sdk-runner
+    cmds:
+      - npm install
+
+  sdk:smoke:
+    desc: Run a live Cursor Cloud Agent investigation (requires CURSOR_API_KEY)
+    deps: [sdk:install]
+    dir: sdk-runner
+    cmds:
+      - node smoke-test.mjs
 
   break:
     desc: Ship the bad chart bump (payments memory 16Mi -> CrashLoopBackOff)

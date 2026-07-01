@@ -1,32 +1,63 @@
-"""The investigator seam: brief in, a validated RCA out.
-
-Three implementations behind one idea:
-
-- The deterministic ``engine`` (see ``ballast.engine.analyze``) is the default:
-  it reads the live cluster and needs no LLM, so the demo is reliable.
-- ``MockInvestigator`` replays a realistic RCA from a fixture, so the pipeline
-  runs with no cluster and no Cursor call at all.
-- ``CursorInvestigator`` shells out to a Node ``@cursor/sdk`` runner (the same
-  pattern as cursor-causa), forwarding the agent's streamed events and validating
-  the final RCA against the contract — the trust boundary.
-"""
+"""The investigator seam: brief in, a stream of events out, ending in a validated RCA."""
 
 from __future__ import annotations
 
 import json
 import os
 import subprocess
+from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from .brief import InvestigationBrief
 from .contract import RCA, GeneratedBy
+from .engine import analyze
 
 _ROOT = Path(__file__).resolve().parent.parent
 
 
-class MockInvestigator:
+class InvestigationEvent(BaseModel):
+    type: str  # status | thinking | tool_call | assistant | rca | error
+    name: str | None = None
+    status: str | None = None
+    text: str | None = None
+    rca: RCA | None = None
+
+
+class Investigator(ABC):
+    @abstractmethod
+    def investigate(self, brief: InvestigationBrief) -> Iterator[InvestigationEvent]:
+        ...
+
+
+class EngineInvestigator(Investigator):
+    """Deterministic on-cluster analyzer — the default for the console demo."""
+
+    def investigate(self, brief: InvestigationBrief) -> Iterator[InvestigationEvent]:
+        yield InvestigationEvent(type="status", text="Assembling triage brief")
+        yield InvestigationEvent(
+            type="tool_call",
+            name="rollout_status",
+            status=f"{brief.namespace}/{brief.service}",
+        )
+        yield InvestigationEvent(
+            type="tool_call",
+            name="get_firing_alerts",
+            status=brief.alert.alertname,
+        )
+        yield InvestigationEvent(type="status", text="Running deterministic RCA engine")
+        try:
+            rca = analyze(brief)
+            rca = RCA.model_validate_json(rca.model_dump_json())
+        except Exception as exc:
+            yield InvestigationEvent(type="error", text=str(exc))
+            return
+        yield InvestigationEvent(type="rca", rca=rca)
+
+
+class MockInvestigator(Investigator):
     """Replays a canned-but-realistic RCA from a fixture."""
 
     def __init__(self, fixture_path: str | Path | None = None) -> None:
@@ -39,14 +70,31 @@ class MockInvestigator:
         rca.service = service
         return rca
 
+    def investigate(self, brief: InvestigationBrief) -> Iterator[InvestigationEvent]:
+        yield InvestigationEvent(type="status", text="Replaying fixture investigation")
+        yield InvestigationEvent(
+            type="tool_call",
+            name="read_file",
+            status="deploy/services/payments.values.yaml",
+        )
+        yield InvestigationEvent(
+            type="tool_call",
+            name="rollout_status",
+            status=f"{brief.namespace}/{brief.service}",
+        )
+        try:
+            rca = RCA.model_validate_json(self.fixture.read_text())
+        except (OSError, ValidationError) as exc:
+            yield InvestigationEvent(type="error", text=f"fixture invalid: {exc}")
+            return
+        rca.generated_by = GeneratedBy.mock
+        rca.investigation_id = brief.investigation_id
+        rca.service = brief.service
+        yield InvestigationEvent(type="rca", rca=rca)
 
-class CursorInvestigator:
-    """Runs a real Cursor cloud agent via a Node sdk-runner and validates its RCA.
 
-    The runner emits normalised JSONL on stdout, ending with a
-    ``{"type":"rca","data":{...}}`` line. We validate the final RCA against the
-    contract here — invalid output is rejected, never rendered as a real finding.
-    """
+class CursorInvestigator(Investigator):
+    """Runs a real Cursor cloud agent via the Node sdk-runner."""
 
     def __init__(
         self,
@@ -62,26 +110,32 @@ class CursorInvestigator:
         self.repo_ref = repo_ref or os.environ.get("CURSOR_TARGET_REF", "main")
         self.model = model or os.environ.get("CURSOR_MODEL", "composer-2")
 
-    def investigate(self, brief: InvestigationBrief):
+    def investigate(self, brief: InvestigationBrief) -> Iterator[InvestigationEvent]:
         env = {
             **os.environ,
             "CURSOR_TARGET_REPO": self.repo_url,
             "CURSOR_TARGET_REF": self.repo_ref,
             "CURSOR_MODEL": self.model,
         }
-        schema = (_ROOT / "schema" / "rca.schema.json").read_text()
-        proc = subprocess.Popen(
-            ["node", "run.mjs"],
-            cwd=self.runner_dir,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            env=env,
-        )
+        try:
+            proc = subprocess.Popen(
+                ["node", "run.mjs"],
+                cwd=self.runner_dir,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                env=env,
+            )
+        except FileNotFoundError as exc:
+            yield InvestigationEvent(type="error", text=f"node/runner not found: {exc}")
+            return
+
         assert proc.stdin and proc.stdout
+        schema = (_ROOT / "schema" / "rca.schema.json").read_text()
         proc.stdin.write(json.dumps({"prompt": brief.to_agent_prompt(schema)}))
         proc.stdin.close()
+
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -94,10 +148,26 @@ class CursorInvestigator:
                 try:
                     rca = RCA.model_validate(evt["data"])
                 except ValidationError as exc:
-                    yield {"type": "error", "text": f"RCA failed contract validation: {exc}"}
+                    yield InvestigationEvent(
+                        type="error", text=f"RCA failed contract validation: {exc}"
+                    )
                     continue
                 rca.generated_by = GeneratedBy.cursor
-                yield {"type": "rca", "rca": rca}
+                yield InvestigationEvent(type="rca", rca=rca)
             else:
-                yield evt
+                yield InvestigationEvent(
+                    type=evt.get("type", "status"),
+                    name=evt.get("name"),
+                    status=evt.get("status"),
+                    text=evt.get("text"),
+                )
         proc.wait()
+
+
+def get_investigator() -> Investigator:
+    mode = os.environ.get("BALLAST_INVESTIGATOR", "engine").lower()
+    if mode == "cursor":
+        return CursorInvestigator()
+    if mode == "mock":
+        return MockInvestigator()
+    return EngineInvestigator()

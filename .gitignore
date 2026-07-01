@@ -7,10 +7,16 @@ __pycache__/
 # Node
 node_modules/
 
+# sdk-runner live run outputs
+sdk-runner/events.jsonl
+sdk-runner/result.json
+sdk-runner/rca-output.json
+
 # Local env / kube
 .env
 kubeconfig
 *.kubeconfig
+.cluster-port-forwards.pid
 
 # Editor
 .DS_Store

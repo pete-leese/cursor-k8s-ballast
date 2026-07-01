@@ -63,12 +63,30 @@ works); `sudo docker ...` always works.
      the rollout/crash facts a live cluster would provide; they exist for exactly
      this no-cluster case and are explicit overrides, never silent defaults.
 
-### On a real cluster (documented for completeness)
+### On a real cluster (the user's Mac, Apple Silicon + Docker Desktop)
 
-`./scripts/setup-cluster.sh` (kind + kube-prometheus-stack + ArgoCD) →
-`./scripts/deploy.sh` → `./scripts/break.sh` (payments `128Mi -> 16Mi`, OOMKill →
-CrashLoopBackOff, alert after `for: 1m`) → `task rca` (port-forward
-`svc/kube-prometheus-stack-prometheus 9090` first) → `./scripts/fix.sh`.
+GitOps via ArgoCD is the deploy path:
+
+- `./scripts/setup-cluster.sh` — kind (local Docker) + kube-prometheus-stack +
+  ArgoCD. Images are multi-arch, so arm64 (Apple Silicon) works.
+- `./scripts/deploy.sh` — applies the ArgoCD `AppProject` + `root-app`
+  (app-of-apps in `deploy/argocd/`); ArgoCD then syncs the five services.
+  **ArgoCD tracks `main`** (targetRevision), so the branch must be pushed/merged
+  there, or edit `targetRevision` in `deploy/argocd/*.yaml`.
+- `./scripts/break.sh` / `./scripts/fix.sh` are **git-commit driven**: they edit
+  `deploy/services/payments.values.yaml` (`limits.memory` via `awk`, preserving
+  the rest), commit, and push to the current branch; ArgoCD syncs the change.
+  `break.sh` → `16Mi` → OOMKill → CrashLoopBackOff → `BallastServiceCrashLooping`
+  after `for: 1m`; `fix.sh` → `128Mi`.
+- `task rca` after `kubectl -n monitoring port-forward
+  svc/kube-prometheus-stack-prometheus 9090`.
+- `mcp-grafana` (in `.mcp.json`) needs a Viewer token: `task grafana:token`
+  after `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana
+  3000:80`.
+- Live Cloud Agent: `sdk-runner/` (`@cursor/sdk`) needs `CURSOR_API_KEY`, a
+  Cursor paid plan, and the Cursor GitHub app authorised on the repo. A **cloud**
+  run cannot reach the Mac's localhost Prometheus/Grafana (it works from the
+  brief + repo); use `CURSOR_RUNTIME=local` for local MCP access.
 
 ### Non-obvious gotchas
 

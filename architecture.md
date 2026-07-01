@@ -60,9 +60,10 @@ kube-state-metrics ─> Prometheus rule (BallastServiceCrashLooping) ─> Alertm
 
 2. **Rollout timestamp source.**
    - *Prototype:* the current ReplicaSet's `creationTimestamp` via `kubectl`.
-   - *Production:* ArgoCD Application sync history (the `deploy/argocd/`
-     Applications are the GitOps representation). The correlation logic is
-     identical — only where the timestamp comes from changes.
+   - *Production:* ArgoCD Application sync history. Here ArgoCD is real (an
+     app-of-apps in `deploy/argocd/` syncs the services from git, and the bad
+     bump is an actual git commit), so the rollout is a genuine ArgoCD sync; the
+     correlation logic is identical — only where the timestamp comes from changes.
 
 3. **`Investigator`.** `engine` / `mock` / `cursor` behind the RCA contract. The
    contract is the trust boundary: a Cloud Agent's JSON is validated against

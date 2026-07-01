@@ -1,7 +1,9 @@
 # Incident runbook — the seeded CrashLoopBackOff
 
-The narrated end-to-end walkthrough. Assumes `task setup` and `task cluster:up`
-have completed and the five services are deployed (`task deploy`).
+The narrated end-to-end walkthrough. Assumes `task setup`, `task cluster:up`, and
+`task deploy` have completed — the latter applies the ArgoCD app-of-apps so
+ArgoCD syncs the five services from git. ArgoCD tracks `main`, so push/merge
+there first (or point `targetRevision` at your branch).
 
 ## 1. Healthy baseline
 
@@ -13,15 +15,17 @@ All five services (`payments`, `checkout`, `orders`, `notifications`, `ledger`)
 are `Running` and `Ready`. `payments` is the upstream every other service
 depends on (see `topology.yaml`).
 
-## 2. Ship the bad chart bump
+## 2. Ship the bad chart bump (a git commit ArgoCD syncs)
 
 ```bash
-./scripts/break.sh            # payments resources.limits.memory: 128Mi -> 16Mi
+./scripts/break.sh            # commits payments resources.limits.memory: 128Mi -> 16Mi
 ```
 
-This is a real `helm upgrade` that lowers `payments`' memory limit below its
-~40 MiB startup ballast. The kubelet OOM-kills the container before it becomes
-ready. Within a few restart cycles:
+This edits `deploy/services/payments.values.yaml`, commits, and pushes. ArgoCD
+detects the change and syncs it (`kubectl -n argocd get applications` shows
+`payments` OutOfSync → Synced). The new limit is below `payments`' ~40 MiB
+startup ballast, so the kubelet OOM-kills the container before it becomes ready.
+Within a few restart cycles:
 
 ```bash
 kubectl -n ballast get pods -l app=payments
@@ -57,11 +61,11 @@ The engine:
 
 The output is JSON validated against `ballast/contract.py`.
 
-## 5. Remediate
+## 5. Remediate (the forward-fix the RCA recommends)
 
 ```bash
-./scripts/fix.sh              # payments resources.limits.memory: -> 128Mi
-kubectl -n ballast get pods -l app=payments   # back to Running/Ready
+./scripts/fix.sh              # commits payments resources.limits.memory -> 128Mi
+kubectl -n ballast get pods -l app=payments   # ArgoCD syncs; back to Running/Ready
 ```
 
 ## Reset

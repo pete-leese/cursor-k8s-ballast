@@ -23,7 +23,7 @@ which is exactly the pattern reuse an FDE needs to prove.
 | `topology.yaml` | Declared service dependency graph (blast radius). |
 | `charts/ballast-service/` | Reusable Helm chart; a service that allocates a memory ballast and is sensitive to its limit. |
 | `deploy/services/*.values.yaml` | Per-service Helm values (the five services). |
-| `deploy/argocd/` | ArgoCD `AppProject` + one `Application` per service (the GitOps representation). |
+| `deploy/argocd/` | ArgoCD `AppProject`, `root-app` (app-of-apps), and `apps/` — one multi-source `Application` per service. Real GitOps. |
 | `clusters/` | kind cluster config + kube-prometheus-stack values. |
 | `observability/prometheus-rule.yaml` | `BallastServiceCrashLooping` / `...OOMKilled` alerts. |
 | `ballast/contract.py` | The RCA contract (Pydantic v2). The trust boundary. |
@@ -31,27 +31,30 @@ which is exactly the pattern reuse an FDE needs to prove.
 | `ballast/engine.py` | Deterministic RCA engine (rollout↔alert correlation, blast radius, recommendation). |
 | `ballast/sources.py` | Read-only Prometheus (HTTP) + Kubernetes (`kubectl`) triage sources. |
 | `ballast/mcp_server.py` | Read-only MCP tools a Cursor agent calls to investigate. |
+| `sdk-runner/` | Node `@cursor/sdk` runner for a live Cursor Cloud Agent investigation. |
 | `fixtures/rca_payments.json` | A valid, realistic RCA (feeds the mock investigator). |
-| `scripts/` | `setup-cluster.sh`, `deploy.sh`, `break.sh`, `fix.sh`. |
+| `scripts/` | `setup-cluster.sh`, `deploy.sh`, `argocd-bootstrap.sh`, `break.sh`, `fix.sh`, `grafana-token.sh`, `offline-rca-demo.sh`. |
 | `architecture.md` | Division of labour, seams, deferred scope. |
 | `docs/incident-runbook.md` | The narrated end-to-end incident walkthrough. |
 
 ## Quick start
 
-Requires `docker`, `kind`, `kubectl`, `helm`, `python3` (and optionally
-[`task`](https://taskfile.dev)).
+Runs on a Mac (Apple Silicon) with **Docker Desktop** + `kind`, `kubectl`,
+`helm`, `python3` (and optionally [`task`](https://taskfile.dev)). ArgoCD tracks
+`main` by default, so push/merge your changes to `main` first (or point
+`targetRevision` in `deploy/argocd/*.yaml` at your branch).
 
 ```bash
 task setup            # python venv + engine deps
-task cluster:up       # kind + kube-prometheus-stack + ArgoCD
-task deploy           # the five services via Helm
-task break            # ship the bad chart bump -> payments CrashLoopBackOff
+task cluster:up       # kind (local Docker) + kube-prometheus-stack + ArgoCD
+task deploy           # GitOps: apply the app-of-apps; ArgoCD syncs the 5 services
+task break            # commit the bad chart bump; ArgoCD syncs -> CrashLoopBackOff
 
 # In another shell, expose Prometheus, then run the RCA:
 kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090 &
 task rca              # correlate rollout+alert+topology -> validated RCA
 
-task fix              # forward-fix: restore the memory limit
+task fix              # forward-fix: commit the restored memory limit
 ```
 
 No cluster? Two offline paths (useful on hosts that can't run nested
@@ -79,9 +82,24 @@ the seeded incident:
   rather than a full rollback that would re-roll `payments` and disrupt five
   dependents.
 
-## Live Cursor Cloud Agent
+## MCP + live Cursor Cloud Agent
 
-The MCP server (`.cursor/mcp.json`) exposes read-only `get_firing_alerts`,
-`query_prometheus`, `rollout_status`, `blast_radius`, and `run_rca` tools. A
-Cloud Agent uses these to reproduce the RCA against the same contract. See
-`docs/agent-mcp.md`.
+Two MCP servers ship in `.mcp.json`:
+
+- **`ballast`** (read-only) — `get_firing_alerts`, `query_prometheus`,
+  `rollout_status`, `blast_radius`, `run_rca`.
+- **`grafana`** — the official [`mcp-grafana`](https://github.com/grafana/mcp-grafana),
+  read-only via a Viewer service-account token. Mint one with
+  `task grafana:token` (port-forward Grafana first) and put it in `.env`.
+
+A live investigation runs through `sdk-runner/` (Node `@cursor/sdk`):
+
+```bash
+export CURSOR_API_KEY=...        # cursor.com -> Integrations -> API Keys
+task sdk:smoke                   # cloud agent clones the repo, returns an RCA
+```
+
+A **cloud** agent runs in Cursor's cloud and cannot reach your Mac's `localhost`
+Prometheus/Grafana — it investigates from the brief + the repo (charts,
+`topology.yaml`, git history). Set `CURSOR_RUNTIME=local` to let the agent use
+the local Grafana/Prometheus MCP directly. See `docs/agent-mcp.md`.
