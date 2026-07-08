@@ -3,6 +3,7 @@
 #   - kube-prometheus-stack (Prometheus + Grafana + Alertmanager + KSM)
 #   - the BallastServiceCrashLooping alert rule
 #   - ArgoCD (optional; SKIP_ARGOCD=1 to skip)
+#   - app-of-apps bootstrap + five services (optional; SKIP_DEPLOY=1 to skip)
 #
 # Idempotent: safe to re-run. Requires docker, kind, kubectl, helm.
 set -euo pipefail
@@ -99,12 +100,13 @@ if [ "${SKIP_ARGOCD:-0}" != "1" ]; then
     -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
   echo "    waiting for argocd-server..."
   kubectl -n argocd rollout status deploy/argocd-server --timeout=5m || true
+  if [ "${SKIP_DEPLOY:-0}" != "1" ]; then
+    echo "==> Bootstrapping ArgoCD app-of-apps and syncing the five services"
+    ./scripts/deploy.sh
+  fi
 else
   echo "==> Skipping ArgoCD (SKIP_ARGOCD=1)"
 fi
 
 echo "==> Platform ready."
-echo "    Deploy the services via GitOps:  ./scripts/deploy.sh"
-echo "    (ArgoCD tracks 'main' by default — push/merge your changes there first,"
-echo "     or edit targetRevision in deploy/argocd/*.yaml to your branch.)"
 ./scripts/cluster-access-info.sh

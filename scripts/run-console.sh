@@ -4,6 +4,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
 PY=./.venv/bin/python
 $PY -c "import fastapi, streamlit" 2>/dev/null || {
   echo "==> Installing console dependencies into .venv"
@@ -11,6 +18,7 @@ $PY -c "import fastapi, streamlit" 2>/dev/null || {
 }
 
 echo "==> Ballast API on http://localhost:8000"
+echo "    Investigator: ${BALLAST_INVESTIGATOR:-engine}  Alert watch: ${BALLAST_ALERT_WATCH:-0}"
 BALLAST_ALERT_WATCH="${BALLAST_ALERT_WATCH:-0}" \
   $PY -m uvicorn ballast.api:app --host 0.0.0.0 --port 8000 &
 API_PID=$!

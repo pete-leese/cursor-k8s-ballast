@@ -34,8 +34,7 @@ supported`). Consequences, all verified during setup:
 - **Docker cannot enforce `--memory`** (`cannot enter cgroupv2 ... it is in
   threaded mode`), so the real kubelet OOM-kill cannot be reproduced here.
 
-So the **live in-cluster CrashLoopBackOff demo (`setup-cluster.sh` → `deploy.sh`
-→ `break.sh`) only runs on a normal Docker/Kubernetes host**, not in this Cloud
+So the **live in-cluster CrashLoopBackOff demo (`setup-cluster.sh` → `break.sh`) only runs on a normal Docker/Kubernetes host**, not in this Cloud
 VM. Do not burn time retrying kind/k3s here. The scripts, charts, and ArgoCD
 manifests are correct and validated (`helm lint`/`template`, `kubeconform`).
 
@@ -68,9 +67,8 @@ works); `sudo docker ...` always works.
 GitOps via ArgoCD is the deploy path:
 
 - `./scripts/setup-cluster.sh` — kind (local Docker) + kube-prometheus-stack +
-  ArgoCD. Images are multi-arch, so arm64 (Apple Silicon) works.
-- `./scripts/deploy.sh` — applies the ArgoCD `AppProject` + `root-app`
-  (app-of-apps in `deploy/argocd/`); ArgoCD then syncs the five services.
+  ArgoCD + app-of-apps bootstrap (the five services). `SKIP_DEPLOY=1` skips GitOps sync.
+  `./scripts/deploy.sh` re-runs bootstrap idempotently.
   **ArgoCD tracks `main`** (targetRevision), so the branch must be pushed/merged
   there, or edit `targetRevision` in `deploy/argocd/*.yaml`.
 - `./scripts/break.sh` / `./scripts/fix.sh` are **git-commit driven**: they edit

@@ -28,8 +28,14 @@ stop_forwards() {
 start_forward() {
   local label=$1
   shift
-  kubectl "$@" &
-  pids+=("$!")
+  if [ "${BACKGROUND:-0}" = "1" ]; then
+    nohup kubectl "$@" >/dev/null 2>&1 &
+    pids+=("$!")
+    disown
+  else
+    kubectl "$@" &
+    pids+=("$!")
+  fi
   echo "    ${label}"
 }
 

@@ -1,9 +1,8 @@
 # Incident runbook — the seeded CrashLoopBackOff
 
-The narrated end-to-end walkthrough. Assumes `task setup`, `task cluster:up`, and
-`task deploy` have completed — the latter applies the ArgoCD app-of-apps so
-ArgoCD syncs the five services from git. ArgoCD tracks `main`, so push/merge
-there first (or point `targetRevision` at your branch).
+The narrated end-to-end walkthrough. Assumes `task setup` and `task cluster:up`
+have completed — `cluster:up` installs the platform and bootstraps ArgoCD so
+the five services sync from git (`main` by default).
 
 ## 1. Healthy baseline
 

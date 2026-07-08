@@ -44,7 +44,7 @@ tasks:
       - "{{.PY}} -m ballast.cli blast-radius {{.SVC}}"
 
   cluster:up:
-    desc: Create kind cluster + install kube-prometheus-stack + ArgoCD
+    desc: Create kind cluster, monitoring stack, ArgoCD, and sync the five services
     cmds:
       - ./scripts/setup-cluster.sh
 

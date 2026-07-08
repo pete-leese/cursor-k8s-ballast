@@ -46,8 +46,8 @@ Runs on a Mac (Apple Silicon) with **Docker Desktop** + `kind`, `kubectl`,
 
 ```bash
 task setup            # python venv + engine deps
-task cluster:up       # kind (local Docker) + kube-prometheus-stack + ArgoCD
-task deploy           # GitOps: apply the app-of-apps; ArgoCD syncs the 5 services
+task cluster:up       # kind + kube-prometheus-stack + ArgoCD + sync the 5 services
+task deploy           # re-run GitOps bootstrap only (idempotent)
 task break            # commit the bad chart bump; ArgoCD syncs -> CrashLoopBackOff
 
 # In another shell, expose Prometheus, then run the RCA:

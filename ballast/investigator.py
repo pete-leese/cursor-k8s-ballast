@@ -111,6 +111,20 @@ class CursorInvestigator(Investigator):
         self.model = model or os.environ.get("CURSOR_MODEL", "composer-2")
 
     def investigate(self, brief: InvestigationBrief) -> Iterator[InvestigationEvent]:
+        sdk_pkg = self.runner_dir / "node_modules" / "@cursor" / "sdk"
+        if not sdk_pkg.exists():
+            yield InvestigationEvent(
+                type="error",
+                text="sdk-runner not installed — run: task sdk:install",
+            )
+            return
+        if not os.environ.get("CURSOR_API_KEY"):
+            yield InvestigationEvent(
+                type="error",
+                text="CURSOR_API_KEY not set — add it to .env and restart the console",
+            )
+            return
+
         env = {
             **os.environ,
             "CURSOR_TARGET_REPO": self.repo_url,
@@ -123,7 +137,7 @@ class CursorInvestigator(Investigator):
                 cwd=self.runner_dir,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 text=True,
                 env=env,
             )
@@ -131,11 +145,12 @@ class CursorInvestigator(Investigator):
             yield InvestigationEvent(type="error", text=f"node/runner not found: {exc}")
             return
 
-        assert proc.stdin and proc.stdout
+        assert proc.stdin and proc.stdout and proc.stderr
         schema = (_ROOT / "schema" / "rca.schema.json").read_text()
         proc.stdin.write(json.dumps({"prompt": brief.to_agent_prompt(schema)}))
         proc.stdin.close()
 
+        saw_event = False
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -153,8 +168,10 @@ class CursorInvestigator(Investigator):
                     )
                     continue
                 rca.generated_by = GeneratedBy.cursor
+                saw_event = True
                 yield InvestigationEvent(type="rca", rca=rca)
             else:
+                saw_event = True
                 yield InvestigationEvent(
                     type=evt.get("type", "status"),
                     name=evt.get("name"),
@@ -162,6 +179,10 @@ class CursorInvestigator(Investigator):
                     text=evt.get("text"),
                 )
         proc.wait()
+        stderr = proc.stderr.read().strip() if proc.stderr else ""
+        if proc.returncode != 0 or (not saw_event and stderr):
+            detail = stderr or f"sdk-runner exited with code {proc.returncode}"
+            yield InvestigationEvent(type="error", text=detail)
 
 
 def get_investigator() -> Investigator:
