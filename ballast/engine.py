@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .brief import AlertContext, InvestigationBrief, RepoTarget, RolloutContext
+from .brief import AlertContext, ArgoCDContext, InvestigationBrief, RepoTarget, RolloutContext
 from .contract import (
     RCA,
     Action,
@@ -32,7 +32,7 @@ from .contract import (
     TimelineEvent,
     TimelineKind,
 )
-from .sources import KubernetesSource, PrometheusSource, _parse_ts
+from .sources import ArgoCDSource, KubernetesSource, PrometheusSource, _parse_ts
 from .topology import DeclaredTopologySource
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -63,6 +63,7 @@ def assemble_brief(
     repo_url: str,
     repo_ref: str = "main",
     alertname: str = "BallastServiceCrashLooping",
+    argocd: ArgoCDSource | None = None,
 ) -> InvestigationBrief:
     """Run triage and assemble the brief, degrading (never crashing) per source."""
     degraded: list[str] = []
@@ -96,6 +97,17 @@ def assemble_brief(
     else:
         degraded.append("kubernetes source not configured")
 
+    argocd_ctx: ArgoCDContext | None = None
+    if argocd is not None:
+        try:
+            raw = argocd.application_context(service)
+            if raw:
+                argocd_ctx = ArgoCDContext.model_validate(raw)
+        except Exception as exc:
+            degraded.append(f"argocd unavailable: {exc}")
+    else:
+        degraded.append("argocd source not configured")
+
     return InvestigationBrief(
         investigation_id=investigation_id,
         service=service,
@@ -117,6 +129,7 @@ def assemble_brief(
         ),
         blast_radius_hint=topology.dependents(service),
         repo=RepoTarget(url=repo_url, ref=repo_ref, chart_path="charts/ballast-service"),
+        argocd=argocd_ctx,
         degraded=degraded,
     )
 
@@ -167,7 +180,10 @@ def analyze(
     )
 
     # --- crash signals ------------------------------------------------------
-    oom = crash.get("last_terminated_reason") == "OOMKilled"
+    oom = (
+        crash.get("last_terminated_reason") == "OOMKilled"
+        or crash.get("exit_code") == 137
+    )
     waiting = crash.get("waiting_reason")
     restarts = crash.get("restarts", 0)
 

@@ -34,6 +34,43 @@ class RepoTarget(BaseModel):
     chart_path: str | None = None  # where the implicated chart/values live
 
 
+class ArgoCDHistoryEntry(BaseModel):
+    id: int | None = None
+    deployed_at: str | None = None
+    revision: str | None = None
+
+
+class ArgoCDResourceResult(BaseModel):
+    kind: str
+    name: str
+    namespace: str | None = None
+    status: str | None = None
+    message: str | None = None
+
+
+class ArgoCDClusterEvent(BaseModel):
+    timestamp: str
+    type: str
+    reason: str
+    message: str
+
+
+class ArgoCDContext(BaseModel):
+    application: str
+    sync_status: str | None = None
+    health_status: str | None = None
+    revision: str | None = None
+    target_revision: str | None = None
+    last_sync_started: str | None = None
+    last_sync_finished: str | None = None
+    last_sync_phase: str | None = None
+    last_sync_message: str | None = None
+    health_transition: str | None = None
+    history: list[ArgoCDHistoryEntry] = []
+    sync_resources: list[ArgoCDResourceResult] = []
+    events: list[ArgoCDClusterEvent] = []
+
+
 class InvestigationBrief(BaseModel):
     investigation_id: str
     service: str
@@ -42,6 +79,7 @@ class InvestigationBrief(BaseModel):
     rollout: RolloutContext
     blast_radius_hint: list[str]  # from topology; the agent confirms/uses it
     repo: RepoTarget
+    argocd: ArgoCDContext | None = None
     degraded: list[str] = []  # triage sources that were unavailable
 
     def to_agent_prompt(self, rca_schema: str) -> str:

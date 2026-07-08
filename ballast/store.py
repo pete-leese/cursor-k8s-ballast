@@ -68,6 +68,8 @@ class InvestigationStore:
         with self._lock:
             record = self._records.get(investigation_id)
             if record is not None:
+                if event.timestamp is None:
+                    event = event.model_copy(update={"timestamp": _now()})
                 record.events.append(event)
 
     def has_active_for_alert(self, alertname: str, service: str) -> bool:

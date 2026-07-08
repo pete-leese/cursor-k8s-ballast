@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from .brief import AlertContext
 from .orchestrator import run_investigation
-from .sources import PrometheusSource
+from .sources import ArgoCDSource, KubernetesSource, PrometheusSource
 from .store import STORE, InvestigationRecord, InvestigationStatus
 
 app = FastAPI(title="Ballast API")
@@ -146,3 +146,29 @@ def get_investigation(investigation_id: str):
     if record is None:
         raise HTTPException(status_code=404, detail="not found")
     return record
+
+
+@app.get("/argocd/applications/{service}")
+def get_argocd_application(service: str):
+    try:
+        argo = ArgoCDSource()
+        ctx = argo.application_context(service)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if ctx is None:
+        raise HTTPException(status_code=404, detail="application not found")
+    return ctx
+
+
+@app.get("/kubernetes/services/{service}")
+def get_service_state(service: str, namespace: str = "ballast"):
+    try:
+        kube = KubernetesSource(namespace=namespace)
+        return {
+            "service": service,
+            "namespace": namespace,
+            "crash_state": kube.crash_state(service),
+            "memory_limit": kube.memory_limit(service),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

@@ -8,7 +8,7 @@ from pathlib import Path
 from .brief import AlertContext, RepoTarget
 from .engine import assemble_brief
 from .investigator import get_investigator
-from .sources import KubernetesSource, PrometheusSource
+from .sources import ArgoCDSource, KubernetesSource, PrometheusSource
 from .store import STORE, InvestigationStatus
 from .topology import DeclaredTopologySource
 
@@ -41,12 +41,17 @@ def run_investigation(
 
         prom: PrometheusSource | None = None
         kube: KubernetesSource | None = None
+        argo: ArgoCDSource | None = None
         try:
             prom = PrometheusSource(prom_url)
         except Exception:
             pass
         try:
             kube = KubernetesSource(namespace=namespace)
+        except Exception:
+            pass
+        try:
+            argo = ArgoCDSource()
         except Exception:
             pass
 
@@ -61,6 +66,7 @@ def run_investigation(
             repo_url=repo.url,
             repo_ref=repo.ref,
             alertname=alert.alertname,
+            argocd=argo,
         )
         if alert.fired_at:
             brief.alert.fired_at = alert.fired_at

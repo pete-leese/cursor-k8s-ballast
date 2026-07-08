@@ -1,30 +1,35 @@
-"""Ballast console — three-pane Kubernetes RCA investigation view.
+"""Ballast console — enterprise RCA investigation view.
 
-LEFT: alerts / investigations (select; simulate an alert).
-CENTRE: incident timeline + live investigation feed.
-RIGHT: validated RCA — correlation, resource change, blast radius, remediation.
+Sidebar: investigation list and actions.
+Main: tabbed full-width workspace (Timeline · GitOps · Investigation · Root cause).
 
-Reads everything from the Ballast API (BALLAST_API_URL).
+Reads from the Ballast API (BALLAST_API_URL).
 """
 
 from __future__ import annotations
 
 import os
 import time
+import html as html_lib
+from datetime import datetime
 
 import requests
 import streamlit as st
 
+from theme import badge_inline, html_panel, inject_styles, pane_title, streamlit_badge_color
+
 API = os.environ.get("BALLAST_API_URL", "http://localhost:8000")
 RUNNING = {"queued", "triaging", "investigating"}
 
-BLUE, GREEN, RED, AMBER, SLATE, INDIGO = (
-    "#2563eb",
-    "#16a34a",
-    "#dc2626",
-    "#d97706",
-    "#64748b",
-    "#4f46e5",
+# Palette
+BLUE, GREEN, RED, AMBER, SLATE, INDIGO, TEAL = (
+    "#1d4ed8",
+    "#15803d",
+    "#b91c1c",
+    "#b45309",
+    "#475569",
+    "#4338ca",
+    "#0f766e",
 )
 STATUS_COLOR = {
     "complete": GREEN,
@@ -32,6 +37,14 @@ STATUS_COLOR = {
     "queued": SLATE,
     "triaging": AMBER,
     "investigating": AMBER,
+    "Synced": GREEN,
+    "OutOfSync": AMBER,
+    "Healthy": GREEN,
+    "Degraded": RED,
+    "Progressing": BLUE,
+    "Missing": RED,
+    "Succeeded": GREEN,
+    "Failed": RED,
 }
 ACTION_COLOR = {
     "rollback": RED,
@@ -43,7 +56,7 @@ EVENT_COLOR = {
     "status": SLATE,
     "thinking": INDIGO,
     "tool_call": BLUE,
-    "assistant": GREEN,
+    "assistant": TEAL,
     "error": RED,
     "rca": GREEN,
 }
@@ -53,39 +66,55 @@ KIND_COLOR = {
     "chart_bump": INDIGO,
     "crashloop": RED,
     "note": SLATE,
+    "argocd": TEAL,
+    "investigation": INDIGO,
 }
 
 st.set_page_config(page_title="Ballast", layout="wide", page_icon="⚓")
-
-st.markdown(
-    """
-<style>
-.block-container { padding-top: 2.2rem; padding-bottom: 2rem; max-width: 1500px; }
-h1 { font-size: 1.5rem !important; margin-bottom: 0 !important; }
-.ballast-sub { color:#64748b; font-size:0.9rem; margin: 0 0 0.6rem 0; }
-.pane-title { font-size:0.78rem; font-weight:700; letter-spacing:0.06em;
-  text-transform:uppercase; color:#64748b; margin:0 0 0.4rem 0; }
-.badge { padding:2px 9px; border-radius:999px; font-size:0.72rem;
-  font-weight:700; white-space:nowrap; }
-.feedline { font-size:0.83rem; padding:3px 0; border-bottom:1px solid #eef1f6; }
-.tl { padding:5px 0 5px 14px; border-left:2px solid #e2e8f0; margin-left:4px; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
+inject_styles()
 
 
 def badge(text: str, color: str) -> str:
-    return f'<span class="badge" style="background:{color}22;color:{color}">{text}</span>'
+    return badge_inline(text, color)
 
 
 def conf_color(score: float) -> str:
     return GREEN if score >= 0.8 else AMBER if score >= 0.5 else RED
 
 
+def parse_ts(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        text = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def fmt_dt(value: str | None) -> str:
+    dt = parse_ts(value)
+    if not dt:
+        return "—"
+    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def fmt_time(value: str | None) -> str:
+    dt = parse_ts(value)
+    if not dt:
+        return "—"
+    return dt.strftime("%H:%M:%S")
+
+
+def short_rev(value: str | None, n: int = 8) -> str:
+    if not value:
+        return "—"
+    return value[:n]
+
+
 def api_get(path: str):
     try:
-        r = requests.get(f"{API}{path}", timeout=5)
+        r = requests.get(f"{API}{path}", timeout=8)
         r.raise_for_status()
         return r.json()
     except Exception as exc:
@@ -103,189 +132,463 @@ def api_post(path: str, body: dict | None = None):
         return None
 
 
-st.markdown("# Ballast")
-st.markdown(
-    '<p class="ballast-sub">Kubernetes / GitOps RCA console · '
-    "CrashLoopBackOff from a bad Helm chart bump</p>",
-    unsafe_allow_html=True,
-)
+def coalesce_feed_events(events: list[dict]) -> list[dict]:
+    """Merge streaming assistant token events into readable blocks."""
+    out: list[dict] = []
+    assistant_buf: list[str] = []
+    assistant_ts: str | None = None
 
-left, centre, right = st.columns([1.05, 1.7, 1.9], gap="medium")
+    def flush_assistant() -> None:
+        nonlocal assistant_buf, assistant_ts
+        if assistant_buf:
+            text = "".join(assistant_buf).strip()
+            if text:
+                out.append(
+                    {"type": "assistant", "text": text, "timestamp": assistant_ts}
+                )
+            assistant_buf = []
+            assistant_ts = None
 
-with left:
-    st.markdown('<p class="pane-title">Alerts</p>', unsafe_allow_html=True)
-    if st.button("Investigate payments alert", use_container_width=True, type="primary"):
+    for e in events:
+        if e.get("type") == "assistant":
+            if not assistant_buf:
+                assistant_ts = e.get("timestamp")
+            assistant_buf.append(e.get("text") or "")
+        elif e.get("type") == "rca":
+            flush_assistant()
+        else:
+            flush_assistant()
+            out.append(e)
+    flush_assistant()
+    return out
+
+
+def build_incident_timeline(
+    record: dict, argocd: dict | None, rca: dict | None
+) -> list[dict]:
+    """Unified chronological timeline from alert, rollout, ArgoCD, and RCA."""
+    rows: list[dict] = []
+
+    def add(ts: str | None, kind: str, label: str, detail: str = "") -> None:
+        if not ts:
+            return
+        rows.append(
+            {
+                "timestamp": ts,
+                "kind": kind,
+                "label": label,
+                "detail": detail,
+            }
+        )
+
+    add(record.get("created_at"), "investigation", "Investigation opened")
+
+    brief = record.get("brief") or {}
+    alert = brief.get("alert") or {}
+    rollout = brief.get("rollout") or {}
+    add(alert.get("fired_at"), "alert", f"Alert fired — {alert.get('alertname', '')}")
+    add(rollout.get("rollout_at"), "rollout", "Kubernetes rollout detected", record["service"])
+
+    argo = argocd or brief.get("argocd")
+    if argo:
+        add(
+            argo.get("last_sync_started"),
+            "argocd",
+            f"ArgoCD sync started — {argo.get('application', record['service'])}",
+            argo.get("last_sync_phase") or "",
+        )
+        add(
+            argo.get("last_sync_finished"),
+            "argocd",
+            f"ArgoCD sync {argo.get('last_sync_phase', 'completed')}",
+            (argo.get("last_sync_message") or "")[:120],
+        )
+        for h in argo.get("history") or []:
+            add(
+                h.get("deployed_at"),
+                "argocd",
+                "ArgoCD deployment recorded",
+                f"rev {short_rev(h.get('revision'))}",
+            )
+        for ev in argo.get("events") or []:
+            add(
+                ev.get("timestamp"),
+                "argocd",
+                f"ArgoCD — {ev.get('reason', 'event')}",
+                ev.get("message", ""),
+            )
+
+    for e in coalesce_feed_events(record.get("events") or []):
+        ts = e.get("timestamp")
+        et = e.get("type")
+        if et == "status" and (e.get("text") or "").startswith("http"):
+            add(ts, "investigation", "Cursor agent launched", e.get("text", ""))
+        elif et == "status":
+            status = e.get("status") or e.get("text") or "status"
+            add(ts, "investigation", f"Agent — {status}")
+        elif et == "error":
+            add(ts, "crashloop", "Investigation error", e.get("text", ""))
+
+    if rca:
+        for ev in rca.get("timeline") or []:
+            add(ev.get("timestamp"), ev.get("kind", "note"), ev.get("label", ""))
+
+    rows.sort(key=lambda r: r.get("timestamp") or "")
+    return rows
+
+
+def render_timeline(rows: list[dict]) -> None:
+    if not rows:
+        st.caption("No timeline events yet.")
+        return
+    parts = ['<div class="ballast-timeline">']
+    for row in rows:
+        kind = row.get("kind", "note")
+        color = KIND_COLOR.get(kind, SLATE)
+        dot = badge_inline(kind.replace("_", " "), color)
+        detail = row.get("detail", "")
+        detail_html = (
+            f'<div style="color:#64748b;font-size:0.78rem;margin-top:0.15rem">'
+            f"{html_lib.escape(detail)}</div>"
+            if detail
+            else ""
+        )
+        parts.append(
+            f'<div class="ballast-tl-row">{dot}'
+            f'<span class="ballast-tl-ts">{fmt_dt(row.get("timestamp"))}</span>'
+            f'<div><strong>{html_lib.escape(row.get("label", ""))}</strong></div>'
+            f"{detail_html}</div>"
+        )
+    parts.append("</div>")
+    html_panel("".join(parts))
+
+
+def render_activity_log(events: list[dict]) -> None:
+    coalesced = coalesce_feed_events(events)
+    if not coalesced:
+        st.caption("Waiting for investigator activity…")
+        return
+
+    parts: list[str] = []
+    for e in coalesced:
+        et = e.get("type", "status")
+        ts = fmt_dt(e.get("timestamp"))
+        color = EVENT_COLOR.get(et, SLATE)
+
+        if et == "tool_call":
+            name = e.get("name") or "tool"
+            status = e.get("status") or ""
+            parts.append(
+                f'<div class="ballast-tool-row">{badge_inline(et, color)}'
+                f'<span style="font-family:monospace;font-size:0.72rem;color:#94a3b8">{ts}</span>'
+                f"<span><strong>{name}</strong> — {status}</span></div>"
+            )
+            continue
+
+        if et == "thinking":
+            text = (e.get("text") or "").strip()
+            if not text:
+                continue
+            parts.append(
+                f'<div class="ballast-activity-card" style="border-left:3px solid {INDIGO}">'
+                f'<div class="ballast-activity-ts">{ts} · thinking</div>'
+                f'<div class="ballast-activity-body" style="color:#64748b;font-style:italic">'
+                f"{html_lib.escape(text)}</div>"
+                f"</div>"
+            )
+            continue
+
+        if et == "assistant":
+            text = (e.get("text") or "").strip()
+            if not text:
+                continue
+            parts.append(
+                f'<div class="ballast-activity-card" style="border-left:3px solid {TEAL}">'
+                f'<div class="ballast-activity-ts">{ts} · agent response</div>'
+                f'<div class="ballast-activity-body">{html_lib.escape(text)}</div></div>'
+            )
+            continue
+
+        bits = " · ".join(
+            b for b in (e.get("status"), e.get("name"), e.get("text")) if b
+        )
+        parts.append(
+            f'<div class="ballast-activity-card">'
+            f'<div class="ballast-activity-ts">{ts}</div>'
+            f"{badge_inline(et, color)} &nbsp; {bits or et}</div>"
+        )
+
+    if any(e.get("type") == "rca" for e in events):
+        parts.append(
+            f'<div class="ballast-activity-card" style="border-left:3px solid {GREEN}">'
+            f"{badge_inline('rca', GREEN)} &nbsp; RCA returned and validated against contract</div>"
+        )
+
+    html_panel("".join(parts))
+
+
+def render_argocd_panel(argo: dict | None, service: str) -> None:
+    if not argo:
+        st.caption(f"No ArgoCD data for `{service}` — is the cluster up?")
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Sync", argo.get("sync_status") or "—", f"rev {short_rev(argo.get('revision'))}")
+    with c2:
+        st.metric("Health", argo.get("health_status") or "—", fmt_dt(argo.get("health_transition")))
+    with c3:
+        st.metric("Last operation", argo.get("last_sync_phase") or "—", fmt_dt(argo.get("last_sync_finished")))
+    with c4:
+        st.metric("Target ref", argo.get("target_revision") or "—", argo.get("application", service))
+
+    msg = argo.get("last_sync_message")
+    if msg:
+        html_panel(f'<div class="ballast-argocd-msg">{html_lib.escape(msg)}</div>')
+
+    resources = argo.get("sync_resources") or []
+    if resources:
+        with st.expander("Sync resource results", expanded=False):
+            for res in resources:
+                status = res.get("status") or "—"
+                color = STATUS_COLOR.get(status, SLATE)
+                st.markdown(
+                    f"{badge_inline(status, color)} **{res.get('kind')}** `{res.get('name')}`"
+                    f" — {res.get('message') or ''}",
+                    unsafe_allow_html=True,
+                )
+
+    events = argo.get("events") or []
+    if events:
+        with st.expander("ArgoCD cluster events", expanded=False):
+            for ev in events:
+                st.markdown(
+                    f"`{fmt_dt(ev.get('timestamp'))}` **{ev.get('reason')}** "
+                    f"({ev.get('type')}) — {ev.get('message')}",
+                )
+
+    history = argo.get("history") or []
+    if history:
+        with st.expander("Deployment history", expanded=False):
+            for h in history:
+                id_suffix = f" (id {h['id']})" if h.get("id") is not None else ""
+                st.markdown(
+                    f"`{fmt_dt(h.get('deployed_at'))}` — rev `{short_rev(h.get('revision'), 12)}`"
+                    f"{id_suffix}"
+                )
+
+
+def render_rca_panel(record: dict, rca: dict) -> None:
+    score = rca["confidence"]["score"]
+    top = st.columns([1, 1, 1])
+    with top[0]:
+        st.markdown(
+            f"Confidence &nbsp; "
+            f'<span style="color:{conf_color(score)};font-weight:700">{score:.0%}</span>',
+            unsafe_allow_html=True,
+        )
+        st.progress(score)
+    with top[1]:
+        act = rca["recommended_action"]["action"]
+        st.badge(act.replace("_", " "), color=streamlit_badge_color(act))
+
+    with top[2]:
+        st.badge(rca["generated_by"], color="blue")
+        st.caption(fmt_dt(record.get("created_at")))
+
+    st.markdown(f"### {rca['summary']}")
+    st.caption(rca["confidence"]["rationale"])
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        with st.expander("Rollout correlation", expanded=True):
+            corr = rca["rollout_correlation"]
+            st.write(
+                f"Rollout **{fmt_dt(corr['rollout_at'])}** → alert "
+                f"**{fmt_dt(corr['alert_fired_at'])}** "
+                f"({corr['delta_seconds']:.0f}s later, "
+                f"{'correlated' if corr['correlated'] else 'not correlated'})"
+            )
+        with st.expander("Resource change", expanded=True):
+            rc = rca["resource_change"]
+            st.code(f"{rc['field']}: {rc['previous']} → {rc['current']}")
+            st.caption(rc["note"])
+    with col_b:
+        with st.expander("Recommended action", expanded=True):
+            st.write(rca["recommended_action"]["reasoning"])
+            st.code(rca["recommended_action"]["remediation"], language="bash")
+        with st.expander("Blast radius", expanded=True):
+            chips = " ".join(badge_inline(s, SLATE) for s in rca["blast_radius"]["if_rolled_back"])
+            st.markdown(chips or "_none_", unsafe_allow_html=True)
+            st.caption(
+                f"{rca['blast_radius']['graph_source']} — {rca['blast_radius']['note']}"
+            )
+
+    with st.expander("Supporting telemetry", expanded=False):
+        for s in rca["supporting_telemetry"]:
+            link = f" — [open]({s['deeplink']})" if s.get("deeplink") else ""
+            q = f"\n`{s['query']}`" if s.get("query") else ""
+            st.markdown(f"- **{s['signal']}**: {s['observation']}{link}{q}")
+
+    with st.expander("Evidence", expanded=False):
+        for ev in rca["evidence"]:
+            link = f" — [link]({ev['deeplink']})" if ev.get("deeplink") else ""
+            st.markdown(
+                f"- {badge_inline(ev['source'], SLATE)} {ev['detail']}{link}",
+                unsafe_allow_html=True,
+            )
+
+
+# ── Sidebar: investigations ───────────────────────────────────────────────
+
+with st.sidebar:
+    st.markdown("## ⚓ Ballast")
+    st.caption("GitOps incident response")
+
+    if st.button("＋ Investigate payments", use_container_width=True, type="primary"):
         res = api_post(
             "/investigations",
             {"alertname": "BallastServiceCrashLooping", "service": "payments"},
         )
         if res:
             st.session_state["selected"] = res["id"]
+
     auto = st.checkbox("Live refresh", value=True)
     st.divider()
 
     investigations = api_get("/investigations") or []
     if not investigations:
-        st.caption("No investigations yet. Run task break, wait for the alert, or click above.")
+        st.caption("No investigations yet.")
+        st.caption("Run `task break` or click above.")
+    else:
+        options = {rec["id"]: rec for rec in investigations}
+        ids = list(options.keys())
+        if "selected" not in st.session_state or st.session_state["selected"] not in ids:
+            st.session_state["selected"] = ids[0]
 
-    _current = st.session_state.get("selected")
-    for rec in investigations:
-        disp = "running" if rec["status"] in RUNNING else rec["status"]
-        is_selected = rec["id"] == _current
-        with st.container(border=True):
-            col_text, col_btn = st.columns([3, 1])
-            with col_text:
-                st.markdown(
-                    f"**{rec['alertname']}** &nbsp; "
-                    + badge(disp, STATUS_COLOR.get(rec["status"], SLATE)),
-                    unsafe_allow_html=True,
-                )
-                st.caption(f"{rec['service']} · {rec['created_at'][11:19]}")
-            with col_btn:
-                btn_type = "primary" if is_selected else "secondary"
-                btn_label = "Viewing" if is_selected else "Open"
-                if st.button(btn_label, key=rec["id"], use_container_width=True, type=btn_type):
-                    st.session_state["selected"] = rec["id"]
+        def _label(iid: str) -> str:
+            rec = options[iid]
+            disp = "●" if rec["status"] in RUNNING else "○"
+            return f"{disp} {rec['service']} · {rec['status']}"
+
+        st.radio(
+            "Investigations",
+            ids,
+            format_func=_label,
+            key="selected",
+        )
+
+        rec = options[st.session_state["selected"]]
+        st.caption(rec["alertname"])
+        st.caption(fmt_dt(rec["created_at"]))
+        st.caption(f"`{rec['id']}`")
 
     if st.session_state.get("api_error"):
-        st.caption(f"API: {st.session_state['api_error']}")
+        st.warning(st.session_state["api_error"])
 
 selected = st.session_state.get("selected")
 record = api_get(f"/investigations/{selected}") if selected else None
+argocd_live = (
+    api_get(f"/argocd/applications/{record['service']}")
+    if record
+    else None
+)
+kube_live = (
+    api_get(f"/kubernetes/services/{record['service']}")
+    if record
+    else None
+)
 
-with centre:
-    st.markdown('<p class="pane-title">Incident</p>', unsafe_allow_html=True)
-    if not record:
-        st.info("Select an investigation on the left, or start one.")
-    else:
+# ── Main workspace ──────────────────────────────────────────────────────────
+
+if not record:
+    st.info("No investigation selected. Use the sidebar to open one or trigger a new investigation.")
+else:
+    head_l, head_r = st.columns([5, 1])
+    with head_l:
         st.markdown(
-            f"### {record['alertname']} &nbsp; "
-            + badge(record["status"], STATUS_COLOR.get(record["status"], SLATE)),
+            f'<p class="ballast-section-head">{record["alertname"]} · {record["service"]}</p>',
             unsafe_allow_html=True,
         )
-        brief = record.get("brief")
-        if brief:
-            rollout = brief.get("rollout", {})
-            if rollout.get("rollout_at"):
-                st.caption(
-                    f"rollout {rollout['rollout_at'][11:19]} · "
-                    f"limit {rollout.get('current_memory_limit', '?')} · "
-                    f"service {record['service']}"
-                )
-            if brief.get("degraded"):
-                st.warning("Triage degraded: " + "; ".join(brief["degraded"]))
+        st.caption(f"Opened {fmt_dt(record.get('created_at'))}")
+    with head_r:
+        st.badge(record["status"], color=streamlit_badge_color(record["status"]))
 
-        cursor_url = next(
-            (
-                e["text"]
-                for e in record.get("events", [])
-                if (e.get("text") or "").startswith("http")
-            ),
-            None,
+    brief = record.get("brief") or {}
+    rollout = brief.get("rollout") or {}
+    crash = (kube_live or {}).get("crash_state") or rollout.get("crash_state") or {}
+    rca = record.get("rca")
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    with m1:
+        st.metric("Service", record["service"])
+    with m2:
+        mem = (kube_live or {}).get("memory_limit") or rollout.get("current_memory_limit") or "—"
+        st.metric(
+            "Memory limit",
+            mem,
+            f"healthy {rollout.get('healthy_memory_limit', '—')}",
         )
-        if cursor_url:
-            st.link_button("Watch this run in Cursor", cursor_url, use_container_width=True)
+    with m3:
+        reason = crash.get("display_state") or crash.get("waiting_reason") or "—"
+        ready_note = f"{crash.get('ready_pods', 0)}/{crash.get('pods', 0)} ready"
+        st.metric("Pod state", reason, f"{crash.get('restarts', 0)} restarts · {ready_note}")
+    with m4:
+        argo = argocd_live or brief.get("argocd") or {}
+        st.metric("ArgoCD sync", argo.get("sync_status") or "—", argo.get("last_sync_phase") or "—")
+    with m5:
+        st.metric("Investigator", (rca or {}).get("generated_by") or "pending")
 
-        rca = record.get("rca")
-        if rca and rca.get("timeline"):
-            st.markdown("**Timeline**")
-            for ev in rca["timeline"]:
-                dot = badge(ev["kind"].replace("_", " "), KIND_COLOR.get(ev["kind"], SLATE))
-                label = ev["label"]
-                if ev.get("deeplink"):
-                    label = f"[{label}]({ev['deeplink']})"
-                st.markdown(
-                    f'<div class="tl">{dot} &nbsp; {label} '
-                    f'<span style="color:#94a3b8">{ev["timestamp"][11:19]}</span></div>',
-                    unsafe_allow_html=True,
-                )
+    if brief.get("degraded"):
+        st.warning("Triage degraded: " + "; ".join(brief["degraded"]))
 
-        st.markdown("**Live investigation feed**")
-        feed = st.container(height=300, border=True)
-        for e in record.get("events", []):
-            if e["type"] == "rca":
-                feed.markdown(
-                    badge("rca", GREEN)
-                    + " &nbsp; RCA returned and validated against the contract",
-                    unsafe_allow_html=True,
-                )
-                continue
-            bits = " ".join(
-                b for b in (e.get("name"), e.get("status"), e.get("text")) if b
-            )
-            feed.markdown(
-                f'<div class="feedline">{badge(e["type"], EVENT_COLOR.get(e["type"], SLATE))}'
-                f" &nbsp; {bits}</div>",
-                unsafe_allow_html=True,
-            )
-        if record["status"] == "failed" and record.get("error"):
-            st.error(record["error"])
+    cursor_url = next(
+        (
+            e.get("text")
+            for e in record.get("events", [])
+            if (e.get("text") or "").startswith("http")
+        ),
+        None,
+    )
+    if cursor_url:
+        st.link_button("Watch this run in Cursor →", cursor_url)
 
-with right:
-    st.markdown('<p class="pane-title">Root cause analysis</p>', unsafe_allow_html=True)
-    rca = record.get("rca") if record else None
-    if not rca:
-        st.info("The RCA appears here once the investigation completes.")
-    else:
-        score = rca["confidence"]["score"]
-        top = st.columns([1, 1])
-        with top[0]:
-            st.markdown(
-                f"Confidence &nbsp; "
-                f'<span style="color:{conf_color(score)};font-weight:700">{score:.0%}</span>',
-                unsafe_allow_html=True,
-            )
-            st.progress(score)
-        with top[1]:
-            act = rca["recommended_action"]["action"]
-            st.markdown(
-                "Recommended "
-                + badge(act.replace("_", " "), ACTION_COLOR.get(act, SLATE)),
-                unsafe_allow_html=True,
-            )
-        st.markdown(f"**{rca['summary']}**")
-        st.caption(rca["confidence"]["rationale"])
+    if record["status"] == "failed" and record.get("error"):
+        st.error(record["error"])
 
-        with st.expander("Rollout correlation", expanded=True):
-            corr = rca["rollout_correlation"]
-            st.write(
-                f"Rollout **{corr['rollout_at'][11:19]}** → alert "
-                f"**{corr['alert_fired_at'][11:19]}** "
-                f"({corr['delta_seconds']:.0f}s later, "
-                f"{'correlated' if corr['correlated'] else 'not correlated'})"
-            )
+    tab_timeline, tab_gitops, tab_investigation, tab_rca = st.tabs(
+        [
+            "Timeline",
+            "GitOps",
+            "Investigation",
+            f"Root cause{' ✓' if rca else ''}",
+        ]
+    )
 
-        with st.expander("Resource change", expanded=True):
-            rc = rca["resource_change"]
-            st.code(f"{rc['field']}: {rc['previous']} → {rc['current']}")
-            st.caption(rc["note"])
+    timeline_rows = build_incident_timeline(record, argocd_live, rca)
 
-        with st.expander("Recommended action", expanded=True):
-            st.write(rca["recommended_action"]["reasoning"])
-            st.code(rca["recommended_action"]["remediation"], language="bash")
+    with tab_timeline:
+        pane_title("Chronological incident timeline")
+        with st.container(border=True):
+            render_timeline(timeline_rows)
+        st.caption(f"{len(timeline_rows)} events across alert, rollout, ArgoCD, and investigation.")
 
-        with st.expander("Blast radius", expanded=True):
-            chips = " ".join(badge(s, SLATE) for s in rca["blast_radius"]["if_rolled_back"])
-            st.markdown(chips or "_none_", unsafe_allow_html=True)
-            st.caption(
-                f"{rca['blast_radius']['graph_source']} — {rca['blast_radius']['note']}"
-            )
+    with tab_gitops:
+        pane_title("ArgoCD application state")
+        render_argocd_panel(argocd_live or brief.get("argocd"), record["service"])
 
-        with st.expander("Supporting telemetry"):
-            for s in rca["supporting_telemetry"]:
-                link = f" — [open]({s['deeplink']})" if s.get("deeplink") else ""
-                q = f"\n`{s['query']}`" if s.get("query") else ""
-                st.markdown(f"- **{s['signal']}**: {s['observation']}{link}{q}")
+    with tab_investigation:
+        pane_title("Agent & engine activity")
+        with st.container(height=480, border=True):
+            render_activity_log(record.get("events") or [])
 
-        with st.expander("Evidence"):
-            for ev in rca["evidence"]:
-                link = f" — [link]({ev['deeplink']})" if ev.get("deeplink") else ""
-                st.markdown(
-                    f"- {badge(ev['source'], SLATE)} {ev['detail']}{link}",
-                    unsafe_allow_html=True,
-                )
-
-        st.caption(f"Generated by: {rca['generated_by']}")
+    with tab_rca:
+        if not rca:
+            st.info("Root cause analysis will appear here when the investigation completes.")
+            if record["status"] in RUNNING:
+                st.caption("Investigation in progress — check the Investigation tab for live activity.")
+        else:
+            render_rca_panel(record, rca)
 
 if record and record["status"] in RUNNING and selected and auto:
     time.sleep(1.5)

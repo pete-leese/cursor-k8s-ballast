@@ -24,6 +24,7 @@ class InvestigationEvent(BaseModel):
     status: str | None = None
     text: str | None = None
     rca: RCA | None = None
+    timestamp: str | None = None
 
 
 class Investigator(ABC):
