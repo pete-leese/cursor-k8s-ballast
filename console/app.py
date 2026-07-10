@@ -744,6 +744,46 @@ def render_cluster_overview(overview: dict) -> None:
                     unsafe_allow_html=True,
                 )
 
+        # Primary call-to-action, shown ONLY while the cluster is unhealthy
+        # (this whole block is gated on `not healthy` — the same source of
+        # truth the banner uses). When healthy the button is absent entirely,
+        # superseding the old always-present-but-disabled sidebar button.
+        # Lives inside the live fragment, so it can't set the `selected` radio
+        # key directly; it stashes the target in `_pending_selected` and reruns
+        # the whole app, where the sidebar applies it before rebuilding the
+        # radio. Behavior/flow is otherwise identical to the old handler.
+        btn_col, _ = st.columns([1, 2])
+        with btn_col:
+            if st.button(
+                "Investigate",
+                key="investigate_main",
+                use_container_width=True,
+                type="primary",
+            ):
+                res = api_post(
+                    "/investigations",
+                    {"alertname": "StreamIngestCrashLooping", "service": primary},
+                )
+                if res and res.get("_conflict"):
+                    detail = res["_conflict"]
+                    existing = detail.get("existing_investigation_id")
+                    if existing:
+                        st.session_state.pop("all_good", None)
+                        st.session_state["_pending_selected"] = existing
+                        st.rerun(scope="app")
+                    elif detail.get("cluster_healthy") and not detail.get("incident_detected") and not detail.get("alert_firing"):
+                        st.session_state["all_good"] = True
+                        st.session_state["_pending_selected"] = CLUSTER_VIEW
+                        st.rerun(scope="app")
+                    else:
+                        st.session_state.pop("all_good", None)
+                        hint = detail.get("hint") or "; ".join(detail.get("blockers") or [])
+                        st.warning(hint)
+                elif res and res.get("id"):
+                    st.session_state.pop("all_good", None)
+                    st.session_state["_pending_selected"] = res["id"]
+                    st.rerun(scope="app")
+
     kube_primary = next(
         (s for s in overview.get("services", []) if s.get("service") == primary),
         None,
@@ -1416,35 +1456,6 @@ primary_service = overview.get("primary_service", "ingest")
 
 with st.sidebar:
     st.markdown(brand_block(), unsafe_allow_html=True)
-
-    if st.button("Investigate", use_container_width=True, type="primary"):
-        res = api_post(
-            "/investigations",
-            {"alertname": "StreamIngestCrashLooping", "service": primary_service},
-        )
-        if res and res.get("_conflict"):
-            detail = res["_conflict"]
-            existing = detail.get("existing_investigation_id")
-            if existing:
-                st.session_state.pop("all_good", None)
-                st.session_state["selected"] = existing
-            elif detail.get("cluster_healthy") and not detail.get("incident_detected") and not detail.get("alert_firing"):
-                st.session_state["all_good"] = True
-                st.session_state["selected"] = CLUSTER_VIEW
-            else:
-                st.session_state.pop("all_good", None)
-                hint = detail.get("hint") or "; ".join(detail.get("blockers") or [])
-                st.warning(hint)
-        elif res and res.get("id"):
-            st.session_state.pop("all_good", None)
-            st.session_state["selected"] = res["id"]
-
-    auto = st.checkbox(
-        "Auto-refresh while investigating",
-        value=True,
-        key="auto_refresh",
-        help="Live-refreshes only the running investigation in place — no full-page reload.",
-    )
     st.divider()
 
     investigations = api_get("/investigations") or []
@@ -1469,6 +1480,14 @@ with st.sidebar:
         st.query_params.clear()
     if st.session_state.pop("_reset_selection", False):
         st.session_state["selected"] = CLUSTER_VIEW
+    # Main-page Investigate navigation: the button now lives in the cluster
+    # overview (inside a fragment, rendered AFTER this radio), so it can't set
+    # the `selected` widget key directly. It stashes the target here and reruns
+    # the app; we apply it before the radio is (re)created, same constraint as
+    # `_reset_selection` above. Unknown ids fall through to the guard below.
+    pending_selected = st.session_state.pop("_pending_selected", None)
+    if pending_selected is not None and pending_selected in ids:
+        st.session_state["selected"] = pending_selected
     if "selected" not in st.session_state or st.session_state["selected"] not in ids:
         st.session_state["selected"] = CLUSTER_VIEW
 
@@ -1527,6 +1546,21 @@ with st.sidebar:
     if st.session_state.get("api_error"):
         st.warning(st.session_state["api_error"])
 
+    # Settings gear pinned to the BOTTOM of the sidebar. Rendered last, then
+    # pushed down by CSS (`.st-key-ballast-sidebar-settings` gets
+    # `margin-top:auto`; see theme.py). st.popover always renders its body
+    # (open/closed is client-side CSS), so the `auto_refresh` session key that
+    # gates the live-poll fragments stays populated whether the menu is open or
+    # not — default True, unchanged.
+    with st.container(key="ballast-sidebar-settings"):
+        with st.popover("", icon=":material/settings:"):
+            st.checkbox(
+                "Auto-refresh while investigating",
+                value=True,
+                key="auto_refresh",
+                help="Live-refreshes only the running investigation in place — no full-page reload.",
+            )
+
 selected = st.session_state.get("selected")
 cluster_mode = selected == CLUSTER_VIEW
 record = api_get(f"/investigations/{selected}") if selected and not cluster_mode else None
@@ -1549,13 +1583,11 @@ if cluster_mode:
         icon="dns",
     )
     stage_pills("Overview", ["Overview", "Investigation"], icons=STAGE_ICONS)
-    if st.session_state.pop("all_good", False):
-        st.markdown(
-            f'<div class="ballast-healthy">'
-            f'{mdi("check_circle", filled=True)} All healthy — no active incidents'
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+    # The healthy banner is owned solely by `render_cluster_overview` (emitted
+    # once whenever the overview reports healthy). Just clear the transient
+    # flag here so it doesn't linger — do NOT emit a second banner, or it would
+    # stack on top of the fragment's copy after an Investigate click.
+    st.session_state.pop("all_good", None)
     # Seed the live fragment's baseline from this full render's fetch so its
     # first tick has data (even while paused) and doesn't immediately escalate
     # to a full-app rerun. The panel itself then live-updates in place.

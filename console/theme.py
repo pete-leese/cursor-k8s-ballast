@@ -555,6 +555,53 @@ BALLAST_CSS = """
     border-radius: 2px !important;
   }
 
+  /* Settings (gear) trigger pinned to the bottom of the sidebar: compact and
+     quiet (muted gear, teal hover accent). Targets the stable stPopover testid
+     rather than volatile Emotion hashes. */
+  section[data-testid="stSidebar"] [data-testid="stPopoverButton"],
+  section[data-testid="stSidebar"] [data-testid="stPopoverButton"]:hover,
+  section[data-testid="stSidebar"] [data-testid="stPopoverButton"]:focus,
+  section[data-testid="stSidebar"] [data-testid="stPopoverButton"][aria-expanded="true"] {
+    border-radius: 2px !important;
+    padding: 0.25rem 0.4rem !important;
+    min-height: 0 !important;
+    color: #0f766e !important;
+    background: rgba(15, 118, 110, 0.08) !important;
+    border-color: transparent !important;
+  }
+  section[data-testid="stSidebar"] [data-testid="stPopoverButton"] [data-testid="stIconMaterial"] {
+    color: #0f766e !important;
+  }
+
+  /* Bottom-pin the settings gear. Streamlit has no native sticky-bottom, so we
+     stretch the sidebar content into a full-height flex column, then push the
+     gear's layout wrapper down with margin-top:auto. The actual ancestry is
+     stSidebarUserContent > div > stVerticalBlock(main) > stLayoutWrapper >
+     .st-key-ballast-sidebar-settings, so the auto margin must sit on the
+     stLayoutWrapper (the direct flex child of the tall main block), not on the
+     settings container (which lives inside a shrink-wrapped 40px wrapper).
+     Stable testids / key-class only — no Emotion hashes. */
+  section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div
+    > [data-testid="stVerticalBlock"] {
+    flex: 1 1 auto;
+  }
+  section[data-testid="stSidebar"] [data-testid="stLayoutWrapper"]:has(
+      > .st-key-ballast-sidebar-settings
+    ) {
+    margin-top: auto !important;
+  }
+
   /* Square-ish tabs, not pill SaaS */
   button[data-baseweb="tab"] {
     border-radius: 2px 2px 0 0 !important;
