@@ -1,0 +1,31 @@
+# ArgoCD Application for catalog. Multi-source: chart + per-service values.
+# The demo incident is a git edit to ingest.values.yaml (scripts/break.sh).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: catalog
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: k8s-ballast
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo
+  sources:
+    - repoURL: https://github.com/pete-leese/cursor-k8s-ballast
+      targetRevision: main
+      ref: values
+    - repoURL: https://github.com/pete-leese/cursor-k8s-ballast
+      targetRevision: main
+      path: charts/ballast-service
+      helm:
+        releaseName: catalog
+        valueFiles:
+          - $values/deploy/services/catalog.values.yaml
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

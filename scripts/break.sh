@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Induce the demo incident the GitOps way:
 #   1. Branch from main
-#   2. Lower payments memory limit (bad chart bump)
+#   2. Lower ingest memory limit (bad chart bump)
 #   3. Open a demo PR (merge manually — ArgoCD syncs after merge to main)
 #
 # Usage: ./scripts/break.sh [SERVICE] [BAD_MEMORY]
-#   defaults: payments 16Mi
+#   defaults: ingest 16Mi
 #
 # Env:
 #   BALLAST_AUTO_MERGE=1   optional: merge the PR automatically
@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 # shellcheck source=scripts/lib/git-pr.sh
 source "$(dirname "$0")/lib/git-pr.sh"
 
-SERVICE="${1:-payments}"
+SERVICE="${1:-ingest}"
 BAD_MEM="${2:-16Mi}"
 BAD_REQ="${3:-${BAD_MEM}}"
 VALUES="deploy/services/${SERVICE}.values.yaml"
@@ -60,7 +60,7 @@ Requests must be ≤ limit or Kubernetes rejects the Deployment.
 - ArgoCD syncs from \`${BASE}\`
 - Kubelet OOM-kills the container (exit **137**)
 - \`${SERVICE}\` enters **CrashLoopBackOff**
-- \`BallastServiceCrashLooping\` fires after ~1 minute
+- \`StreamIngestCrashLooping\` fires after ~1 minute
 
 ### Restore
 \`\`\`bash
@@ -81,7 +81,7 @@ git_pr_maybe_merge "${PR_URL}"
 cat <<EOF
 
 ==> Next: merge the PR, then ArgoCD will sync ${SERVICE} from ${BASE}.
-    Watch:  kubectl -n ballast get pods -l app=${SERVICE} -w
+    Watch:  kubectl -n demo get pods -l app=${SERVICE} -w
             open http://localhost:9090/alerts?state=firing
     Restore: task fix
 EOF

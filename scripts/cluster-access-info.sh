@@ -26,8 +26,8 @@ monitoring_installed() {
 }
 
 ballast_deployed() {
-  kubectl get ns ballast >/dev/null 2>&1 \
-    && kubectl -n ballast get svc payments >/dev/null 2>&1
+  kubectl get ns demo >/dev/null 2>&1 \
+    && kubectl -n demo get svc ingest >/dev/null 2>&1
 }
 
 echo
@@ -57,9 +57,9 @@ echo
 echo "  Ballast services (after task deploy)"
 if ballast_deployed; then
   echo "    In-cluster only by default (port 8080 per service):"
-  for svc in payments checkout orders ledger notifications; do
-    if kubectl -n ballast get svc "$svc" >/dev/null 2>&1; then
-      echo "      ${svc}  http://${svc}.ballast.svc.cluster.local:8080/healthz"
+  for svc in ingest transcode playback catalog recommendations; do
+    if kubectl -n demo get svc "$svc" >/dev/null 2>&1; then
+      echo "      ${svc}  http://${svc}.demo.svc.cluster.local:8080/healthz"
     fi
   done
 else

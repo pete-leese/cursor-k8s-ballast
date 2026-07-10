@@ -1,5 +1,5 @@
 # The alert that starts the workflow. When any container in the `ballast`
-# namespace sits in CrashLoopBackOff for a minute, BallastServiceCrashLooping
+# namespace sits in CrashLoopBackOff for a minute, StreamIngestCrashLooping
 # fires. kube-state-metrics (bundled with kube-prometheus-stack) exposes the
 # waiting-reason series; the container name equals the service name by design,
 # so the alert points straight at the offending service.
@@ -15,11 +15,11 @@ spec:
   groups:
     - name: ballast.rules
       rules:
-        - alert: BallastServiceCrashLooping
+        - alert: StreamIngestCrashLooping
           expr: >-
             max by (namespace, container) (
               kube_pod_container_status_waiting_reason{
-                namespace="ballast", reason="CrashLoopBackOff"
+                namespace="demo", reason="CrashLoopBackOff"
               }
             ) > 0
           for: 1m
@@ -32,11 +32,11 @@ spec:
               has been in CrashLoopBackOff for over a minute. Correlate the rollout
               timestamp with this alert time and inspect the resource limits — the
               inputs to the ballast RCA investigation.
-        - alert: BallastServiceOOMKilled
+        - alert: StreamIngestOOMKilled
           expr: >-
             max by (namespace, container) (
               kube_pod_container_status_last_terminated_reason{
-                namespace="ballast", reason="OOMKilled"
+                namespace="demo", reason="OOMKilled"
               }
             ) > 0
           for: 1m

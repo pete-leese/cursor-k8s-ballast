@@ -4,16 +4,16 @@
 groups:
   - name: ballast.rules
     rules:
-      - alert: BallastServiceCrashLooping
-        expr: max by (namespace, container) (kube_pod_container_status_waiting_reason{namespace="ballast", reason="CrashLoopBackOff"}) > 0
+      - alert: StreamIngestCrashLooping
+        expr: max by (namespace, container) (kube_pod_container_status_waiting_reason{namespace="demo", reason="CrashLoopBackOff"}) > 0
         for: 1m
         labels:
           severity: page
         annotations:
           summary: "{{ $labels.container }} is CrashLooping in {{ $labels.namespace }}"
           description: "Container CrashLoopBackOff for over a minute; correlate the rollout timestamp with this alert."
-      - alert: BallastServiceOOMKilled
-        expr: max by (namespace, container) (kube_pod_container_status_last_terminated_reason{namespace="ballast", reason="OOMKilled"}) > 0
+      - alert: StreamIngestOOMKilled
+        expr: max by (namespace, container) (kube_pod_container_status_last_terminated_reason{namespace="demo", reason="OOMKilled"}) > 0
         for: 1m
         labels:
           severity: page

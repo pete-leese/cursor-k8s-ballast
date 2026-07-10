@@ -1,0 +1,13 @@
+# ingest — memory-heavy stream ingest (chunk buffers). Demo incident target.
+fullnameOverride: ingest
+replicaCount: 2
+ballastMb: 40
+service:
+  version: "0.1.0"
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi

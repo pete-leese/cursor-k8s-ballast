@@ -28,7 +28,7 @@ CURSOR_API_KEY=...your-key... node smoke-test.mjs
 # optional overrides:
 #   CURSOR_TARGET_REPO=https://github.com/pete-leese/cursor-k8s-ballast
 #   CURSOR_TARGET_REF=main
-#   CURSOR_MODEL=composer-2
+#   CURSOR_MODEL=composer-2.5
 #   CURSOR_RUNTIME=local   # run on this machine so the agent can use the local
 #                          # Grafana/Prometheus MCP from .cursor/mcp.json
 ```

@@ -2,13 +2,13 @@
 # Forward-fix via PR on main (merge manually unless BALLAST_AUTO_MERGE=1).
 #
 # Usage: ./scripts/fix.sh [SERVICE] [GOOD_MEMORY]
-#   defaults: payments 128Mi
+#   defaults: ingest 128Mi
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=scripts/lib/git-pr.sh
 source "$(dirname "$0")/lib/git-pr.sh"
 
-SERVICE="${1:-payments}"
+SERVICE="${1:-ingest}"
 GOOD_MEM="${2:-128Mi}"
 GOOD_REQ="${3:-64Mi}"
 VALUES="deploy/services/${SERVICE}.values.yaml"

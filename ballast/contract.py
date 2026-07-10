@@ -13,10 +13,11 @@ we can hand the agent an exact target and fail closed when it deviates. Pydantic
 v2 gives us both runtime validation and the JSON Schema export from one
 definition.
 
-This is the Kubernetes/GitOps variant of the cursor-causa RCA contract: the
-incident is a bad Helm chart bump (resource limits set too low) that drives a
-service into CrashLoopBackOff, and the evidence/telemetry come from Prometheus,
-Kubernetes and the chart/git history rather than an application code path.
+This is the Kubernetes/GitOps RCA contract for the stream-fleet demo: the
+incident is a bad Helm chart bump (resource limits set too low) that drives
+``ingest`` into CrashLoopBackOff, and the evidence/telemetry come from
+Prometheus, Kubernetes, and the chart/git history rather than an application
+code path.
 """
 
 from __future__ import annotations
@@ -85,11 +86,16 @@ class TimelineEvent(BaseModel):
 
 class Evidence(BaseModel):
     """A single supporting fact, tagged by source and optionally deep-linked
-    into Prometheus/Grafana/ArgoCD so an engineer can verify it in one click."""
+    into Prometheus/Grafana/ArgoCD so an engineer can verify it in one click.
+
+    ``screenshot_url`` is optional — populated when an investigator attaches a
+    UI capture (ArgoCD / Prometheus / Grafana) that the console can render inline.
+    """
 
     source: EvidenceSource
     detail: str
     deeplink: str | None = None
+    screenshot_url: str | None = None
 
 
 class RolloutCorrelation(BaseModel):
@@ -155,7 +161,7 @@ class RCA(BaseModel):
     schema_version: str = "1.0"
     investigation_id: str
     service: str
-    namespace: str = "ballast"
+    namespace: str = "demo"
     generated_by: GeneratedBy
     summary: str  # one-line headline
     confidence: Confidence

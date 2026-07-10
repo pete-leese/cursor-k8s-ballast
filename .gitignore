@@ -18,5 +18,8 @@ kubeconfig
 *.kubeconfig
 .cluster-port-forwards.pid
 
+# Persisted investigations / evidence (local demo state)
+.ballast/
+
 # Editor
 .DS_Store

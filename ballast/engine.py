@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .argocd_evidence import argocd_evidence_items
 from .brief import AlertContext, ArgoCDContext, InvestigationBrief, RepoTarget, RolloutContext
 from .contract import (
     RCA,
@@ -32,13 +33,15 @@ from .contract import (
     TimelineEvent,
     TimelineKind,
 )
+from .prometheus_evidence import prometheus_alerts_url
+from .screenshot import grafana_dashboard_url
 from .sources import ArgoCDSource, KubernetesSource, PrometheusSource, _parse_ts
 from .topology import DeclaredTopologySource
 
 _ROOT = Path(__file__).resolve().parent.parent
 
 # Default deep links for a local kind + kube-prometheus-stack setup.
-PROM_ALERTS_URL = "http://localhost:9090/alerts"
+PROM_ALERTS_URL = prometheus_alerts_url()
 PROM_GRAPH_URL = "http://localhost:9090/graph"
 GRAFANA_URL = "http://localhost:3000"
 
@@ -62,7 +65,7 @@ def assemble_brief(
     healthy_memory: str | None,
     repo_url: str,
     repo_ref: str = "main",
-    alertname: str = "BallastServiceCrashLooping",
+    alertname: str = "StreamIngestCrashLooping",
     argocd: ArgoCDSource | None = None,
 ) -> InvestigationBrief:
     """Run triage and assemble the brief, degrading (never crashing) per source."""
@@ -256,6 +259,8 @@ def analyze(
             deeplink=PROM_ALERTS_URL,
         ),
     ]
+    if brief.argocd is not None:
+        evidence.extend(argocd_evidence_items(brief.argocd, service))
 
     # --- supporting telemetry (verifiable PromQL) ---------------------------
     telemetry = [
@@ -280,6 +285,15 @@ def analyze(
             ),
             observation=f"Restart count climbing ({restarts} observed) with backoff.",
             deeplink=PROM_GRAPH_URL,
+        ),
+        TelemetrySignal(
+            signal="Ballast RCA Grafana dashboard",
+            query=None,
+            observation=(
+                f"kube-state-metrics view for {service}: CrashLoop, OOMKilled, "
+                f"memory working set vs limit, restarts."
+            ),
+            deeplink=grafana_dashboard_url(service),
         ),
     ]
 

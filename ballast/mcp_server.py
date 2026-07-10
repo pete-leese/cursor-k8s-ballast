@@ -28,7 +28,7 @@ from .sources import KubernetesSource, PrometheusSource
 from .topology import DeclaredTopologySource
 
 _ROOT = Path(__file__).resolve().parent.parent
-NAMESPACE = os.environ.get("BALLAST_NAMESPACE", "ballast")
+NAMESPACE = os.environ.get("BALLAST_NAMESPACE", "demo")
 PROM_URL = os.environ.get("PROMETHEUS_URL", "http://localhost:9090")
 REPO = os.environ.get("BALLAST_REPO", "https://github.com/pete-leese/cursor-k8s-ballast")
 

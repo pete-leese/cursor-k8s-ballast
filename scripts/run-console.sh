@@ -18,8 +18,9 @@ $PY -c "import fastapi, streamlit" 2>/dev/null || {
 }
 
 echo "==> Ballast API on http://localhost:8000"
-echo "    Investigator: ${BALLAST_INVESTIGATOR:-engine}  Alert watch: ${BALLAST_ALERT_WATCH:-0}"
+echo "    Investigator: ${BALLAST_INVESTIGATOR:-engine}  Alert watch: ${BALLAST_ALERT_WATCH:-0}  Auto-remediate: ${BALLAST_AUTO_REMEDIATE:-0}"
 BALLAST_ALERT_WATCH="${BALLAST_ALERT_WATCH:-0}" \
+BALLAST_AUTO_REMEDIATE="${BALLAST_AUTO_REMEDIATE:-$([ -n "${CURSOR_API_KEY:-}" ] && echo 1 || echo 0)}" \
   $PY -m uvicorn ballast.api:app --host 0.0.0.0 --port 8000 &
 API_PID=$!
 trap 'kill $API_PID 2>/dev/null || true' EXIT

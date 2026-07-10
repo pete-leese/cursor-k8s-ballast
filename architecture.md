@@ -1,10 +1,10 @@
 # k8s-ballast — architecture
 
 This document describes the shape of the system and the **seams** that keep the
-prototype honest about what would change in production. It is the Kubernetes /
-GitOps sibling of `cursor-causa`'s architecture: the same division of labour,
-applied to a different incident class (a bad Helm chart bump instead of an app
-code regression).
+prototype honest about what would change in production. The incident class is a
+**bad Helm chart bump** on a media-streaming fleet (memory limit too low →
+OOMKill → CrashLoopBackOff on `ingest`), investigated over Prometheus / Grafana
+and remediable via ArgoCD GitOps.
 
 ## Division of labour
 
@@ -23,7 +23,7 @@ vs **expensive semantic investigation**.
   - the deterministic **engine** (`analyze`) — correlates rollout↔alert,
     characterises the resource change, computes blast radius, recommends
     rollback vs forward-fix. No LLM; the demo's reliability rests here.
-  - the **mock** — replays a fixture RCA (`fixtures/rca_payments.json`).
+  - the **mock** — replays a fixture RCA (`fixtures/rca_ingest.json`).
   - the **Cursor Cloud Agent** — reads the same brief and the read-only
     Prometheus/Grafana MCP tools, traces the chart/git history semantically, and
     returns JSON validated against the same contract.
@@ -34,7 +34,7 @@ discipline is what makes the demo repeatable rather than a one-off prompt.
 ## Components
 
 ```
-kube-state-metrics ─> Prometheus rule (BallastServiceCrashLooping) ─> Alertmanager
+kube-state-metrics ─> Prometheus rule (StreamIngestCrashLooping) ─> Alertmanager
                                                      │
         ballast triage ─ PrometheusSource (HTTP, read-only) ────────┤
                        ─ KubernetesSource (kubectl: rollout ts, crash state, limits)

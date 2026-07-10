@@ -1,0 +1,99 @@
+{
+  "schema_version": "1.0",
+  "investigation_id": "inv-2026-0701-1230-ingest",
+  "service": "ingest",
+  "namespace": "demo",
+  "generated_by": "engine",
+  "summary": "A chart bump lowered ingest's memory limit to 16Mi (from 128Mi), OOM-killing the container on startup and driving it into CrashLoopBackOff ~95s later.",
+  "confidence": {
+    "score": 0.9,
+    "rationale": "OOMKilled (confirmed) with exitCode 137 is an unambiguous memory-limit kill; the alert fired 95s after the rollout (inside the correlation window); the only changed field is the memory limit."
+  },
+  "timeline": [
+    {
+      "timestamp": "2026-07-01T12:30:00Z",
+      "kind": "rollout",
+      "label": "Rollout of ingest shipped resources.limits.memory=16Mi (chart 0.2.0)",
+      "deeplink": null
+    },
+    {
+      "timestamp": "2026-07-01T12:30:00Z",
+      "kind": "chart_bump",
+      "label": "charts/ballast-service values: memory 128Mi -> 16Mi",
+      "deeplink": null
+    },
+    {
+      "timestamp": "2026-07-01T12:31:35Z",
+      "kind": "crashloop",
+      "label": "ingest pods OOMKilled and entered CrashLoopBackOff (6 restarts observed)",
+      "deeplink": null
+    },
+    {
+      "timestamp": "2026-07-01T12:31:35Z",
+      "kind": "alert",
+      "label": "StreamIngestCrashLooping fired for ingest",
+      "deeplink": "http://localhost:9090/alerts"
+    }
+  ],
+  "rollout_correlation": {
+    "rollout_at": "2026-07-01T12:30:00Z",
+    "alert_fired_at": "2026-07-01T12:31:35Z",
+    "delta_seconds": 95.0,
+    "correlated": true,
+    "window_seconds": 600
+  },
+  "resource_change": {
+    "field": "resources.limits.memory",
+    "previous": "128Mi",
+    "current": "16Mi",
+    "chart_version_from": "0.1.0",
+    "chart_version_to": "0.2.0",
+    "note": "The chart bump lowered ingest's memory limit to 16Mi, below the container's ~40Mi startup ballast working set. The kubelet OOM-kills the container before it becomes ready, so it enters CrashLoopBackOff. Restoring the limit to 128Mi is a one-field forward-fix."
+  },
+  "evidence": [
+    {
+      "source": "chart",
+      "detail": "charts/ballast-service values for ingest set resources.limits.memory=16Mi; the previous healthy value was 128Mi. This is the only field that changed.",
+      "deeplink": null
+    },
+    {
+      "source": "kubernetes",
+      "detail": "Pod container state: waiting.reason=CrashLoopBackOff, lastState.terminated.reason=OOMKilled, exitCode=137, restarts=6. OOMKilled + exitCode 137 is a memory-limit kill, not a code crash.",
+      "deeplink": null
+    },
+    {
+      "source": "prometheus",
+      "detail": "StreamIngestCrashLooping is firing; alert activeAt 2026-07-01T12:31:35Z is 95s after the rollout at 2026-07-01T12:30:00Z (within the 600s correlation window).",
+      "deeplink": "http://localhost:9090/alerts"
+    }
+  ],
+  "supporting_telemetry": [
+    {
+      "signal": "CrashLoopBackOff waiting reason",
+      "query": "kube_pod_container_status_waiting_reason{namespace=\"demo\", reason=\"CrashLoopBackOff\", container=\"ingest\"}",
+      "observation": "Value 1 for ingest — the kubelet is holding the container in CrashLoopBackOff.",
+      "deeplink": "http://localhost:9090/graph"
+    },
+    {
+      "signal": "container restarts",
+      "query": "max(kube_pod_container_status_restarts_total{namespace=\"demo\", container=\"ingest\"})",
+      "observation": "Restart count climbing (6 observed) with backoff.",
+      "deeplink": "http://localhost:9090/graph"
+    }
+  ],
+  "blast_radius": {
+    "if_rolled_back": [
+      "transcode",
+      "catalog",
+      "recommendations",
+      "playback"
+    ],
+    "graph_source": "declared:topology.yaml",
+    "note": "4 service(s) depend on ingest (transcode, catalog, recommendations, playback). A full chart rollback churns ingest again and briefly disrupts all of them; a targeted memory-limit forward-fix touches only ingest."
+  },
+  "recommended_action": {
+    "action": "forward_fix",
+    "reasoning": "The regression is a single field (memory limit 128Mi -> 16Mi) and the fix is trivial and low-risk. A full rollback of the chart bump would also revert any unrelated changes in it and re-roll ingest, disrupting 4 downstream service(s): transcode, catalog, recommendations, playback. Prefer a targeted forward-fix that restores the limit only.",
+    "remediation": "helm upgrade ingest charts/ballast-service -n ballast --reuse-values --set resources.limits.memory=128Mi   # or set it back in deploy/services/ingest.values.yaml and let ArgoCD sync"
+  }
+}

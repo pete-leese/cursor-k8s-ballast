@@ -9,3 +9,5 @@ fastapi>=0.110
 uvicorn[standard]>=0.27
 streamlit>=1.32
 requests>=2.31
+# Evidence screenshots (ArgoCD / Prometheus / Grafana via headless Chromium).
+playwright>=1.40

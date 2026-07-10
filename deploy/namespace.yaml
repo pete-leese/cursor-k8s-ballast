@@ -1,6 +1,17 @@
+# Demo fleet (stream services) — incident target namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+  labels:
+    app.kubernetes.io/part-of: k8s-ballast
+    app.kubernetes.io/component: demo-fleet
+---
+# Ballast product namespace — RCA engine / console (kept separate from demo apps).
 apiVersion: v1
 kind: Namespace
 metadata:
   name: ballast
   labels:
     app.kubernetes.io/part-of: k8s-ballast
+    app.kubernetes.io/component: product

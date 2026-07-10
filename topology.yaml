@@ -1,24 +1,21 @@
 # Declared service dependency graph for the k8s-ballast prototype.
 #
-# This is the data behind blast-radius reasoning: "rolling back payments also
-# disrupts checkout, orders, notifications and ledger -> prefer a targeted
-# forward-fix". It is a *declared* graph on purpose. In production this same
-# shape would come from a service-mesh / Consul MCP TopologySource; the
-# prototype reads this file instead. The seam (ballast TopologySource
-# interface) means swapping to a live source does not touch the RCA engine.
+# Media-streaming fleet: ingest is the memory-heavy upstream (chunk buffers).
+# A bad chart bump OOMs ingest → CrashLoopBackOff; dependents feel the blast
+# radius. Prefer a targeted forward-fix of ingest's memory limit over rolling
+# back the whole pipeline.
 #
-# `depends_on` reads "calls / depends on the named upstream". So payments is the
-# upstream that everything else relies on; a rollback of payments affects every
-# service that lists it (directly or transitively) in depends_on.
+# In production this same shape would come from a service-mesh / Consul MCP
+# TopologySource; the prototype reads this file instead.
 
 services:
-  payments:
-    depends_on: []            # the upstream service the incident is about
-  checkout:
-    depends_on: [payments]
-  orders:
-    depends_on: [payments, checkout]
-  notifications:
-    depends_on: [orders]
-  ledger:
-    depends_on: [payments]
+  ingest:
+    depends_on: []            # upstream — the incident target
+  transcode:
+    depends_on: [ingest]
+  playback:
+    depends_on: [ingest, transcode]
+  recommendations:
+    depends_on: [playback]
+  catalog:
+    depends_on: [ingest]

@@ -1,101 +1,416 @@
-"""Streamlit-safe styling helpers for the Ballast console."""
+"""Ballast console visual system — streaming-fleet ops, not generic SaaS slate."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
-# Inject once per session via st.html (works reliably on Streamlit 1.58+).
+ASSETS = Path(__file__).resolve().parent / "assets"
+LOGO_PNG = ASSETS / "ballast-icon.png"
+LOGO_SVG = ASSETS / "ballast-icon.svg"
+
+# Distinctive identity: ink + teal (broadcast/ops), not purple SaaS or causa-slate.
 BALLAST_CSS = """
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400..600,0..1,0&display=block');
+
+  .material-symbols-outlined {
+    font-family: "Material Symbols Outlined" !important;
+    font-weight: normal !important;
+    font-style: normal !important;
+    font-size: 1.25rem;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    -webkit-font-smoothing: antialiased;
+    font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
+    vertical-align: middle;
+    user-select: none;
+  }
+  .mdi-fill {
+    font-variation-settings: "FILL" 1, "wght" 500, "GRAD" 0, "opsz" 24;
+  }
+
+  html, body, [class*="css"] {
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif !important;
+  }
+  code, pre, .stCode, [data-testid="stCaption"] code {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace !important;
+  }
+
   .main .block-container {
-    padding-top: 1.25rem;
+    padding-top: 1rem;
     padding-bottom: 2rem;
-    max-width: 1200px;
+    max-width: 1120px;
   }
+
+  /* Dark rail — different silhouette from light-sidebar causa-style consoles */
   section[data-testid="stSidebar"] > div {
-    background-color: #f8fafc;
-    border-right: 1px solid #e2e8f0;
+    background: linear-gradient(180deg, #0b1220 0%, #111827 100%);
+    border-right: 1px solid #1f2937;
+    color: #e5e7eb;
   }
-  section[data-testid="stSidebar"] h2 {
-    font-size: 1.1rem !important;
-    font-weight: 700 !important;
+  section[data-testid="stSidebar"] h2,
+  section[data-testid="stSidebar"] label,
+  section[data-testid="stSidebar"] p,
+  section[data-testid="stSidebar"] span,
+  section[data-testid="stSidebar"] .stMarkdown {
+    color: #e5e7eb !important;
   }
-  [data-testid="stMetric"] {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-    padding: 0.55rem 0.75rem;
+  section[data-testid="stSidebar"] [data-testid="stCaption"] {
+    color: #9ca3af !important;
   }
-  [data-testid="stMetricLabel"] {
-    font-size: 0.68rem !important;
-    font-weight: 600 !important;
+  section[data-testid="stSidebar"] hr {
+    border-color: #1f2937 !important;
+  }
+  section[data-testid="stSidebar"] .stRadio label {
+    color: #d1d5db !important;
+  }
+
+  .ballast-brand-block {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    margin: 0 0 0.95rem 0;
+  }
+  .ballast-logo-img {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    flex-shrink: 0;
+    display: block;
+  }
+  .ballast-brand {
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: #f9fafb !important;
+    margin: 0;
+    line-height: 1.15;
+  }
+  .ballast-brand-sub {
+    font-size: 0.72rem;
+    color: #9ca3af !important;
+    margin: 0.15rem 0 0 0;
+    line-height: 1.3;
+  }
+
+  .ballast-side-meta {
+    margin: 0.75rem 0 0.25rem 0;
+    padding: 0.7rem 0.75rem;
+    background: #0f172a;
+    border: 1px solid #1f2937;
+    border-radius: 4px;
+  }
+  .ballast-side-meta-alert {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #f3f4f6;
+    line-height: 1.35;
+    margin: 0 0 0.35rem 0;
+    word-break: break-word;
+  }
+  .ballast-side-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.65rem;
+    font-size: 0.7rem;
+    color: #9ca3af;
+  }
+  .ballast-side-meta-id {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: 0.66rem;
+    color: #6b7280;
+  }
+
+  /* Main canvas — cool off-white, not warm cream */
+  .stApp {
+    background: #f3f4f6;
+  }
+
+  .ballast-masthead {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.75rem 1rem;
+    align-items: flex-end;
+    margin: 0 0 1rem 0;
+    padding-bottom: 0.75rem;
+    border-bottom: 3px solid #0f766e;
+  }
+  .ballast-masthead h1 {
+    font-size: 1.45rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: #0b1220;
+    margin: 0;
+    text-wrap: balance;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+  .ballast-masthead h1 .material-symbols-outlined {
+    color: #0f766e;
+    font-size: 1.55rem;
+  }
+  .ballast-masthead .sub {
+    font-size: 0.8rem;
+    color: #4b5563;
+    margin-top: 0.2rem;
+  }
+
+  .ballast-stage {
+    display: inline-flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    margin: 0 0 0.85rem 0;
+  }
+  .ballast-stage-pill {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.28rem 0.55rem;
+    border-radius: 2px;
+    background: #e5e7eb;
+    color: #374151;
+    border: 1px solid #d1d5db;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .ballast-stage-pill .material-symbols-outlined {
+    font-size: 0.95rem;
+  }
+  .ballast-stage-pill--on {
+    background: #0f766e;
+    border-color: #0f766e;
+    color: #ecfdf5;
+  }
+
+  .ballast-hero {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.5rem;
+    align-items: baseline;
+    background: #0b1220;
+    color: #e5e7eb;
+    border-radius: 2px;
+    padding: 1rem 1.1rem;
+    margin: 0 0 0.85rem 0;
+  }
+  .ballast-hero-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #9ca3af;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #64748b !important;
+    letter-spacing: 0.06em;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
   }
-  [data-testid="stMetricValue"] {
-    font-size: 1rem !important;
-    font-weight: 700 !important;
-    color: #0f172a !important;
+  .ballast-hero-label .material-symbols-outlined {
+    font-size: 1rem;
+    color: #2dd4bf;
+  }
+  .ballast-hero-value {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: #f9fafb;
+    margin-right: 0.4rem;
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  .ballast-hero-meta {
+    font-size: 0.8rem;
+    color: #d1d5db;
+  }
+  .ballast-hero--bad .ballast-hero-value { color: #fb7185; }
+  .ballast-hero--ok .ballast-hero-value { color: #2dd4bf; }
+
+  .ballast-corr {
+    font-size: 0.84rem;
+    color: #1f2937;
+    background: #ecfdf5;
+    border: 1px solid #99f6e4;
+    border-radius: 2px;
+    padding: 0.6rem 0.8rem;
+    margin: 0 0 0.85rem 0;
+    line-height: 1.45;
+  }
+  .ballast-corr strong { color: #0f766e; font-weight: 700; }
+
+  .ballast-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.35rem;
+    font-size: 0.82rem;
+    color: #1f2937;
+    margin: 0 0 0.9rem 0;
+    padding: 0.55rem 0;
+    border-top: 1px solid #e5e7eb;
+    border-bottom: 1px solid #e5e7eb;
+  }
+  .ballast-facts strong { color: #0b1220; font-weight: 600; }
+  .ballast-facts span { color: #6b7280; }
+
+  .ballast-section-head {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #0b1220;
+    margin: 0.4rem 0 0.7rem 0;
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .ballast-section-head .material-symbols-outlined {
+    color: #0f766e;
+    font-size: 1.25rem;
   }
   .ballast-pane-title {
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #64748b;
-    margin: 0.25rem 0 0.6rem 0;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #0f766e;
+    margin: 0.2rem 0 0.55rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
   }
-  .ballast-section-head {
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: #0f172a;
-    margin: 0 0 0.85rem 0;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid #e2e8f0;
+  .ballast-pane-title .material-symbols-outlined {
+    font-size: 1.05rem;
+  }
+
+  [data-testid="stMetric"] {
+    background: transparent;
+    border: none;
+    padding: 0.1rem 0;
+  }
+  [data-testid="stCaption"] {
+    font-size: 0.75rem !important;
+  }
+  [data-testid="stMetricLabel"] {
+    font-size: 0.75rem !important;
+    font-weight: 600 !important;
+    color: #4b5563 !important;
+  }
+  [data-testid="stMetricValue"] {
+    font-size: 0.95rem !important;
+    font-weight: 600 !important;
+    color: #0b1220 !important;
+  }
+
+  /* Teal CTAs — avoid default Streamlit blue (common in sibling demos) */
+  section[data-testid="stSidebar"] .stButton > button[kind="primary"],
+  .stButton > button[kind="primary"] {
+    background: #0f766e !important;
+    border-color: #0f766e !important;
+    color: #ecfdf5 !important;
+    border-radius: 2px !important;
+    font-weight: 600 !important;
+  }
+  section[data-testid="stSidebar"] .stButton > button[kind="primary"]:hover,
+  .stButton > button[kind="primary"]:hover {
+    background: #115e59 !important;
+    border-color: #115e59 !important;
+  }
+  section[data-testid="stSidebar"] .stButton > button,
+  .stButton > button {
+    border-radius: 2px !important;
+  }
+
+  /* Square-ish tabs, not pill SaaS */
+  button[data-baseweb="tab"] {
+    border-radius: 2px 2px 0 0 !important;
+    font-weight: 600 !important;
+  }
+  button[data-baseweb="tab"][aria-selected="true"] {
+    color: #0f766e !important;
   }
 </style>
 """
 
-
-# Scoped styles bundled into each st.html() block (iframes do not inherit app CSS).
 COMPONENT_CSS = """
-  .ballast-timeline { position:relative; margin:0.25rem 0; padding-left:1.4rem; }
+  .ballast-timeline { position:relative; margin:0.25rem 0; padding-left:1.35rem; }
   .ballast-timeline::before {
-    content:""; position:absolute; left:0.45rem; top:0.4rem; bottom:0.4rem;
-    width:2px; background:#e2e8f0;
+    content:""; position:absolute; left:0.4rem; top:0.35rem; bottom:0.35rem;
+    width:2px; background:#99f6e4;
   }
   .ballast-tl-row {
-    position:relative; padding:0.5rem 0 0.5rem 0.7rem; font-size:0.84rem;
-    color:#334155; line-height:1.45;
+    position:relative; display:flex; flex-wrap:wrap; gap:0.25rem 0.75rem;
+    align-items:baseline; padding:0.45rem 0 0.45rem 0.65rem; font-size:0.84rem;
+    color:#1f2937; line-height:1.45;
   }
   .ballast-tl-row::before {
-    content:""; position:absolute; left:-1.05rem; top:0.78rem;
-    width:9px; height:9px; border-radius:50%; background:#fff; border:2px solid #94a3b8;
+    content:""; position:absolute; left:-1.05rem; top:0.72rem;
+    width:8px; height:8px; border-radius:1px; background:#0f766e; border:0;
   }
+  .ballast-tl-main { flex:1 1 12rem; min-width:0; }
   .ballast-tl-ts {
-    float:right; font-family:ui-monospace,Menlo,monospace; font-size:0.72rem;
-    color:#94a3b8; margin-left:0.5rem;
+    font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace; font-size:0.7rem;
+    color:#6b7280; white-space:nowrap;
+  }
+  .ballast-tl-detail {
+    flex:1 1 100%; color:#4b5563; font-size:0.78rem; margin-top:0.1rem;
   }
   .ballast-activity-card {
-    background:#fff; border:1px solid #e2e8f0; border-radius:8px;
-    padding:0.6rem 0.8rem; margin-bottom:0.5rem; font-size:0.84rem; color:#334155;
+    background:#fff; border:1px solid #e5e7eb; border-radius:2px;
+    padding:0.55rem 0.75rem; margin-bottom:0.45rem; font-size:0.84rem; color:#1f2937;
   }
+  .ballast-activity-card--thinking { background:#f9fafb; }
+  .ballast-activity-card--assistant { background:#f0fdfa; border-color:#99f6e4; }
+  .ballast-activity-card--rca { background:#ecfdf5; border-color:#5eead4; }
   .ballast-activity-ts {
-    font-family:ui-monospace,Menlo,monospace; font-size:0.7rem; color:#94a3b8;
-    margin-bottom:0.25rem;
+    font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace; font-size:0.68rem; color:#6b7280;
+    margin-bottom:0.2rem;
   }
   .ballast-activity-body { white-space:pre-wrap; word-break:break-word; line-height:1.5; }
+  .ballast-activity-body--muted { color:#4b5563; }
   .ballast-tool-row {
-    display:flex; gap:0.55rem; align-items:baseline; padding:0.4rem 0;
-    border-bottom:1px solid #f1f5f9; font-size:0.82rem; color:#334155;
+    display:flex; gap:0.55rem; align-items:baseline; padding:0.35rem 0;
+    border-bottom:1px solid #f3f4f6; font-size:0.82rem; color:#1f2937;
   }
   .ballast-argocd-msg {
-    font-size:0.82rem; color:#475569; background:#f8fafc;
-    border-left:3px solid #cbd5e1; padding:0.55rem 0.7rem;
-    border-radius:0 6px 6px 0; line-height:1.45;
+    font-size:0.82rem; color:#1f2937; background:#f9fafb;
+    border:1px solid #e5e7eb; padding:0.55rem 0.7rem;
+    border-radius:2px; line-height:1.45;
   }
 """
+
+
+def mdi(name: str, *, filled: bool = False, size: int | None = None, cls: str = "") -> str:
+    """Google Material Symbols Outlined icon."""
+    classes = ["material-symbols-outlined"]
+    if filled:
+        classes.append("mdi-fill")
+    if cls:
+        classes.append(cls)
+    style = f' style="font-size:{size}px"' if size else ""
+    return f'<span class="{" ".join(classes)}"{style} aria-hidden="true">{name}</span>'
+
+
+def brand_block(subtitle: str = "Kubernetes · GitOps incident response") -> str:
+    """Sidebar product mark: logo image + wordmark."""
+    if LOGO_SVG.exists():
+        svg = LOGO_SVG.read_text(encoding="utf-8")
+        svg = svg.replace(
+            "<svg ",
+            '<svg class="ballast-logo-img" width="40" height="40" ',
+            1,
+        )
+        logo = svg
+    elif LOGO_PNG.exists():
+        logo = mdi("monitoring", filled=True, size=36)
+    else:
+        logo = mdi("monitoring", filled=True, size=36)
+    return (
+        f'<div class="ballast-brand-block">{logo}'
+        f'<div><p class="ballast-brand">Ballast</p>'
+        f'<p class="ballast-brand-sub">{subtitle}</p></div></div>'
+    )
 
 
 def html_panel(body: str) -> None:
@@ -108,8 +423,8 @@ def inject_styles() -> None:
 
 def badge_inline(text: str, color: str) -> str:
     return (
-        f'<span style="display:inline-block;padding:2px 10px;border-radius:999px;'
-        f"font-size:0.7rem;font-weight:700;white-space:nowrap;"
+        f'<span style="display:inline-block;padding:2px 7px;border-radius:2px;'
+        f"font-size:0.7rem;font-weight:600;white-space:nowrap;"
         f"background:{color}18;color:{color};border:1px solid {color}40\">"
         f"{text}</span>"
     )
@@ -131,5 +446,34 @@ def streamlit_badge_color(status: str) -> str:
     }.get(status, "blue")
 
 
-def pane_title(text: str) -> None:
-    st.markdown(f'<p class="ballast-pane-title">{text}</p>', unsafe_allow_html=True)
+def pane_title(text: str, icon: str | None = None) -> None:
+    lead = f"{mdi(icon)} " if icon else ""
+    st.markdown(
+        f'<p class="ballast-pane-title">{lead}{text}</p>',
+        unsafe_allow_html=True,
+    )
+
+
+def masthead(title: str, subtitle: str = "", icon: str | None = None) -> None:
+    lead = f"{mdi(icon)} " if icon else ""
+    sub = f'<div class="sub">{subtitle}</div>' if subtitle else ""
+    st.markdown(
+        f'<div class="ballast-masthead"><div><h1>{lead}{title}</h1>{sub}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def stage_pills(
+    active: str, stages: list[str], icons: dict[str, str] | None = None
+) -> None:
+    icons = icons or {}
+    bits = []
+    for s in stages:
+        cls = (
+            "ballast-stage-pill ballast-stage-pill--on"
+            if s == active
+            else "ballast-stage-pill"
+        )
+        ic = mdi(icons[s]) + " " if s in icons else ""
+        bits.append(f'<span class="{cls}">{ic}{s}</span>')
+    st.markdown(f'<div class="ballast-stage">{"".join(bits)}</div>', unsafe_allow_html=True)

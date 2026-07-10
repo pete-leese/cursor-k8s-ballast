@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Create the local kind cluster and install the platform:
 #   - kube-prometheus-stack (Prometheus + Grafana + Alertmanager + KSM)
-#   - the BallastServiceCrashLooping alert rule
+#   - the StreamIngestCrashLooping alert rule
 #   - ArgoCD (optional; SKIP_ARGOCD=1 to skip)
 #   - app-of-apps bootstrap + five services (optional; SKIP_DEPLOY=1 to skip)
 #
@@ -90,6 +90,9 @@ wait_for_monitoring_stack "${MONITORING_WAIT_TIMEOUT}"
 
 echo "==> Applying the CrashLoopBackOff alert rule"
 kubectl apply -f observability/prometheus-rule.yaml
+
+echo "==> Provisioning Ballast RCA Grafana dashboard"
+./scripts/apply-grafana-dashboard.sh
 
 if [ "${SKIP_ARGOCD:-0}" != "1" ]; then
   echo "==> Installing ArgoCD (namespace: argocd)"
