@@ -35,6 +35,16 @@ grafana:
       disable_login_form: false
   service:
     type: ClusterIP
+  # Sidecar loads ConfigMaps labelled grafana_dashboard=1 (Ballast RCA dashboard).
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: false
 
 # Keep the footprint modest for a local kind cluster.
 alertmanager:

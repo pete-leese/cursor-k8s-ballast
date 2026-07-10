@@ -20,6 +20,7 @@ from theme import badge_inline, html_panel, inject_styles, pane_title, streamlit
 
 API = os.environ.get("BALLAST_API_URL", "http://localhost:8000")
 RUNNING = {"queued", "triaging", "investigating"}
+SIDEBAR_INVESTIGATION_LIMIT = 12
 
 # Palette
 BLUE, GREEN, RED, AMBER, SLATE, INDIGO, TEAL = (
@@ -68,6 +69,7 @@ KIND_COLOR = {
     "note": SLATE,
     "argocd": TEAL,
     "investigation": INDIGO,
+    "remediation": GREEN,
 }
 
 st.set_page_config(page_title="Ballast", layout="wide", page_icon="⚓")
@@ -112,24 +114,279 @@ def short_rev(value: str | None, n: int = 8) -> str:
     return value[:n]
 
 
-def api_get(path: str):
+def api_get(path: str, *, quiet: bool = False):
     try:
         r = requests.get(f"{API}{path}", timeout=8)
         r.raise_for_status()
+        if not quiet:
+            st.session_state.pop("api_error", None)
         return r.json()
     except Exception as exc:
-        st.session_state["api_error"] = str(exc)
+        if not quiet:
+            st.session_state["api_error"] = str(exc)
         return None
 
 
-def api_post(path: str, body: dict | None = None):
+def api_get_artifact(investigation_id: str, name: str) -> bytes | None:
     try:
-        r = requests.post(f"{API}{path}", json=body or {}, timeout=10)
+        r = requests.get(
+            f"{API}/investigations/{investigation_id}/artifacts/{name}",
+            timeout=15,
+        )
+        if r.status_code == 200 and r.content[:4] == b"\x89PNG":
+            return r.content
+    except Exception:
+        pass
+    return None
+
+
+def investigation_artifacts(record: dict) -> dict[str, bool]:
+    names = set(record.get("artifact_names") or [])
+    return {
+        "prometheus": "prometheus.png" in names,
+        "argocd": "argocd.png" in names,
+        "grafana": "grafana.png" in names,
+    }
+
+
+def render_screenshot_image(
+    investigation_id: str,
+    artifact_name: str,
+    *,
+    caption: str,
+) -> bool:
+    png = api_get_artifact(investigation_id, artifact_name)
+    if not png:
+        return False
+    st.image(png, caption=caption, use_container_width=True)
+    return True
+
+
+CHAT_STARTERS = [
+    "Why forward-fix instead of a full rollback?",
+    "Walk me through the rollout ↔ alert correlation.",
+    "Which evidence is strongest and why?",
+    "What happens to downstream services if we roll back?",
+]
+
+
+def render_rca_discuss(investigation_id: str, record: dict) -> None:
+    st.divider()
+    pane_title("Discuss findings")
+
+    status = api_get(f"/investigations/{investigation_id}/chat/status", quiet=True) or {}
+    if not status.get("available"):
+        st.info(
+            "RCA chat uses the **Cursor Cloud Agents API**. Add `CURSOR_API_KEY` to "
+            "`.env` and restart the Ballast API."
+        )
+        return
+
+    messages = record.get("chat_messages") or []
+    chat_box = st.container(height=360, border=True)
+    with chat_box:
+        if not messages:
+            st.caption(
+                "Ask follow-up questions about the RCA — blast radius, evidence, "
+                "remediation trade-offs, or what to check next."
+            )
+        for msg in messages:
+            with st.chat_message(msg.get("role", "assistant")):
+                st.markdown(msg.get("content", ""))
+
+    starter_cols = st.columns(len(CHAT_STARTERS))
+    for idx, question in enumerate(CHAT_STARTERS):
+        if starter_cols[idx].button(
+            question,
+            key=f"rca_starter_{investigation_id}_{idx}",
+            use_container_width=True,
+        ):
+            with st.spinner("Thinking…"):
+                api_post(
+                    f"/investigations/{investigation_id}/chat",
+                    {"message": question},
+                    timeout=200,
+                )
+            st.rerun()
+
+    if prompt := st.chat_input(
+        "Ask about the root cause…",
+        key=f"rca_chat_{investigation_id}",
+    ):
+        with st.spinner("Thinking…"):
+            api_post(
+                f"/investigations/{investigation_id}/chat",
+                {"message": prompt},
+                timeout=200,
+            )
+        st.rerun()
+
+    agent_id = status.get("cursor_agent_id")
+    if agent_id:
+        st.caption(
+            f"Continuing via Cursor Cloud Agent `{agent_id}` · "
+            f"[open agent](https://cursor.com/agents/{agent_id})"
+        )
+    model = status.get("model")
+    if model:
+        st.caption(f"Grounded in RCA + live cluster context · Cursor · {model}")
+
+
+def api_post(path: str, body: dict | None = None, *, timeout: int = 10):
+    try:
+        r = requests.post(f"{API}{path}", json=body or {}, timeout=timeout)
         r.raise_for_status()
         return r.json()
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 409:
+            try:
+                return {"_conflict": exc.response.json().get("detail", {})}
+            except Exception:
+                return {"_conflict": {"hint": str(exc)}}
+        detail = None
+        if exc.response is not None:
+            try:
+                payload = exc.response.json()
+                detail = payload.get("detail") or payload
+            except Exception:
+                detail = (exc.response.text or "")[:400]
+        if detail:
+            st.error(f"API error: {detail}")
+        else:
+            st.error(f"API error: {exc}")
+        return None
     except Exception as exc:
         st.error(f"API error: {exc}")
         return None
+
+
+def render_service_stat_cards(
+    service: str,
+    kube: dict | None,
+    argo: dict | None,
+    *,
+    rollout: dict | None = None,
+    investigator: str | None = None,
+    firing_count: int | None = None,
+) -> None:
+    rollout = rollout or {}
+    crash = (kube or {}).get("crash_state") or rollout.get("crash_state") or {}
+    argo = argo or {}
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    with m1:
+        st.metric("Service", service)
+    with m2:
+        mem = (kube or {}).get("memory_limit") or rollout.get("current_memory_limit") or "—"
+        st.metric("Memory limit", mem, f"healthy {rollout.get('healthy_memory_limit', '—')}")
+    with m3:
+        reason = crash.get("display_state") or crash.get("waiting_reason") or "—"
+        ready_note = f"{crash.get('ready_pods', 0)}/{crash.get('pods', 0)} ready"
+        st.metric("Pod state", reason, f"{crash.get('restarts', 0)} restarts · {ready_note}")
+    with m4:
+        st.metric(
+            "ArgoCD sync",
+            argo.get("sync_status") or "—",
+            argo.get("health_status") or argo.get("last_sync_phase") or "—",
+        )
+    with m5:
+        if firing_count is not None:
+            st.metric("Firing alerts", firing_count, "Ballast-related")
+        else:
+            st.metric("Investigator", investigator or "pending")
+
+
+def render_cluster_overview(overview: dict) -> None:
+    primary = overview.get("primary_service", "payments")
+    argo = overview.get("argocd") or {}
+    pf = overview.get("preflight") or {}
+    healthy = overview.get("healthy", False)
+    ballast_firing = overview.get("ballast_alert_firing", False)
+
+    if healthy:
+        st.success("Everything looks good — cluster, deployments, and ArgoCD are healthy. No firing alerts.")
+    elif ballast_firing:
+        st.warning(
+            f"**{pf.get('alertname', 'BallastServiceCrashLooping')}** is firing for **{primary}**. "
+            "Click **Investigate problems** for RCA, evidence, and an auto-fix PR."
+        )
+    else:
+        st.info("Some services need attention. Review the grid below or click **Investigate problems**.")
+
+    kube_primary = next(
+        (s for s in overview.get("services", []) if s.get("service") == primary),
+        None,
+    )
+    render_service_stat_cards(
+        primary,
+        kube_primary,
+        argo,
+        firing_count=overview.get("firing_alert_count", 0),
+    )
+
+    st.markdown(
+        f'<p class="ballast-section-head">Services · namespace `{overview.get("namespace", "ballast")}`</p>',
+        unsafe_allow_html=True,
+    )
+    for row in overview.get("services", []):
+        svc = row.get("service", "?")
+        ok = row.get("healthy", False)
+        color = GREEN if ok else RED
+        pod = row.get("pod_state") or "—"
+        sync = row.get("argocd_sync") or "—"
+        health = row.get("argocd_health") or "—"
+        mem = row.get("memory_limit") or "—"
+        ready = f"{row.get('ready_pods', 0)}/{row.get('total_pods', 0)}"
+        st.markdown(
+            f"{badge_inline('ok' if ok else 'degraded', color)} **{svc}** · pods `{pod}` ({ready}) · "
+            f"mem `{mem}` · ArgoCD `{sync}` / `{health}`",
+            unsafe_allow_html=True,
+        )
+
+    prom_error = overview.get("prometheus_error")
+    if prom_error:
+        st.caption(f"Prometheus unreachable: {prom_error}")
+
+    firing = overview.get("firing_alerts") or []
+    if firing:
+        with st.expander(f"Ballast-related firing alerts ({len(firing)})", expanded=ballast_firing):
+            for a in firing:
+                st.markdown(
+                    f"- **{a.get('alertname', '?')}** · service `{a.get('service', '—')}` "
+                    f"· ns `{a.get('namespace', '—')}`"
+                )
+
+    infra = overview.get("infra_alerts") or []
+    if infra:
+        with st.expander(
+            f"Other cluster alerts ({len(infra)}) — kind control-plane noise, not part of the demo",
+            expanded=False,
+        ):
+            st.caption(
+                "These come from kube-prometheus-stack's default rules (kind doesn't expose "
+                "control-plane metrics; `Watchdog` is an always-firing heartbeat by design). "
+                "Not related to the Ballast incident."
+            )
+            for a in infra:
+                st.markdown(
+                    f"- {a.get('alertname', '?')} · ns `{a.get('namespace', '—')}` "
+                    f"· `{a.get('severity', '—')}`"
+                )
+
+    tab_gitops, tab_deploy = st.tabs(["GitOps", "Deployments"])
+    with tab_gitops:
+        pane_title("ArgoCD application state")
+        render_argocd_panel(argo, primary)
+    with tab_deploy:
+        pane_title("Recent ArgoCD deployments")
+        history = (argo or {}).get("history") or []
+        if not history:
+            st.caption("No deployment history yet.")
+        else:
+            for h in history[:8]:
+                st.markdown(
+                    f"`{fmt_dt(h.get('deployed_at'))}` — rev `{short_rev(h.get('revision'), 12)}`"
+                )
 
 
 def coalesce_feed_events(events: list[dict]) -> list[dict]:
@@ -233,7 +490,26 @@ def build_incident_timeline(
         for ev in rca.get("timeline") or []:
             add(ev.get("timestamp"), ev.get("kind", "note"), ev.get("label", ""))
 
-    rows.sort(key=lambda r: r.get("timestamp") or "")
+    add(
+        record.get("remediation_issue_created_at"),
+        "remediation",
+        "Auto-remediation — GitHub issue filed",
+        record.get("github_issue_url") or "",
+    )
+    add(
+        record.get("remediation_pr_opened_at"),
+        "remediation",
+        "Auto-remediation — forward-fix PR opened",
+        record.get("remediation_pr_url") or "",
+    )
+    add(
+        record.get("remediation_pr_merged_at"),
+        "remediation",
+        "Auto-remediation — forward-fix PR merged",
+        record.get("remediation_pr_url") or "",
+    )
+
+    rows.sort(key=lambda r: r.get("timestamp") or "", reverse=True)
     return rows
 
 
@@ -247,9 +523,15 @@ def render_timeline(rows: list[dict]) -> None:
         color = KIND_COLOR.get(kind, SLATE)
         dot = badge_inline(kind.replace("_", " "), color)
         detail = row.get("detail", "")
+        if detail.startswith("http"):
+            detail_body = (
+                f'<a href="{html_lib.escape(detail)}" target="_blank">{html_lib.escape(detail)}</a>'
+            )
+        else:
+            detail_body = html_lib.escape(detail)
         detail_html = (
             f'<div style="color:#64748b;font-size:0.78rem;margin-top:0.15rem">'
-            f"{html_lib.escape(detail)}</div>"
+            f"{detail_body}</div>"
             if detail
             else ""
         )
@@ -378,6 +660,85 @@ def render_argocd_panel(argo: dict | None, service: str) -> None:
                 )
 
 
+def render_autofix_status(record: dict, action: str) -> None:
+    """Show GitHub issue + fix PR status under forward-fix recommendation."""
+    if action not in ("forward_fix", "rollback"):
+        return
+
+    status = record.get("remediation_status")
+    issue_url = record.get("github_issue_url")
+    pr_url = record.get("remediation_pr_url")
+    agent_id = record.get("remediation_agent_id")
+    err = record.get("remediation_error")
+    auto_enabled = os.environ.get("BALLAST_AUTO_REMEDIATE", "0") == "1"
+    in_flight = status in ("queued", "creating_issue", "launching_agent")
+
+    st.divider()
+    st.markdown("**Auto-remediation**")
+
+    if not status and record.get("status") == "complete":
+        if auto_enabled:
+            st.caption(
+                "Plan: file a GitHub issue from this RCA → launch a Cursor remediation agent "
+                "→ open a forward-fix pull request. Links appear here as each step completes."
+            )
+        else:
+            st.caption(
+                "Set `BALLAST_AUTO_REMEDIATE=1` (and `CURSOR_API_KEY`) to auto-file an issue "
+                "and open a fix PR, or trigger manually below."
+            )
+
+    if status == "failed" and not pr_url:
+        st.error(err or "Remediation failed")
+        if st.button("Retry issue + fix agent", key=f"remediate_{record['id']}"):
+            api_post(f"/investigations/{record['id']}/remediate", timeout=30)
+            st.rerun()
+        if issue_url:
+            st.link_button("GitHub issue →", issue_url, use_container_width=True)
+        return
+
+    if in_flight:
+        st.caption(f"Status: {status.replace('_', ' ')}…")
+
+    cols = st.columns(2)
+    with cols[0]:
+        if issue_url:
+            st.link_button("GitHub issue filed →", issue_url, use_container_width=True)
+            created = record.get("remediation_issue_created_at")
+            if created:
+                st.caption(f"Filed {fmt_dt(created)}")
+        elif in_flight:
+            st.caption("GitHub issue — filing…")
+        else:
+            st.caption("GitHub issue — pending")
+    with cols[1]:
+        if pr_url:
+            st.link_button("Forward-fix PR →", pr_url, use_container_width=True)
+            opened = record.get("remediation_pr_opened_at")
+            merged = record.get("remediation_pr_merged_at")
+            if merged:
+                st.caption(f"Merged {fmt_dt(merged)}")
+            elif opened:
+                st.caption(f"Opened {fmt_dt(opened)}")
+        elif in_flight or (status == "complete" and agent_id and not pr_url):
+            st.caption("Looking up fix PR on GitHub…")
+            if agent_id:
+                st.link_button(
+                    "Remediation agent →",
+                    f"https://cursor.com/agents/{agent_id}",
+                    use_container_width=True,
+                )
+        else:
+            st.caption("Fix PR — pending")
+
+    if not issue_url and not status and record.get("status") == "complete":
+        if st.button("File issue + launch fix agent", key=f"remediate_start_{record['id']}"):
+            api_post(f"/investigations/{record['id']}/remediate", timeout=30)
+            st.rerun()
+    elif err and status == "complete":
+        st.caption(err)
+
+
 def render_rca_panel(record: dict, rca: dict) -> None:
     score = rca["confidence"]["score"]
     top = st.columns([1, 1, 1])
@@ -417,6 +778,7 @@ def render_rca_panel(record: dict, rca: dict) -> None:
         with st.expander("Recommended action", expanded=True):
             st.write(rca["recommended_action"]["reasoning"])
             st.code(rca["recommended_action"]["remediation"], language="bash")
+            render_autofix_status(record, act)
         with st.expander("Blast radius", expanded=True):
             chips = " ".join(badge_inline(s, SLATE) for s in rca["blast_radius"]["if_rolled_back"])
             st.markdown(chips or "_none_", unsafe_allow_html=True)
@@ -430,7 +792,47 @@ def render_rca_panel(record: dict, rca: dict) -> None:
             q = f"\n`{s['query']}`" if s.get("query") else ""
             st.markdown(f"- **{s['signal']}**: {s['observation']}{link}{q}")
 
-    with st.expander("Evidence", expanded=False):
+    artifacts = investigation_artifacts(record)
+    with st.expander("Evidence", expanded=True):
+        shot_cols = st.columns(3)
+        with shot_cols[0]:
+            st.caption("Prometheus")
+            if artifacts["prometheus"]:
+                render_screenshot_image(
+                    record["id"],
+                    "prometheus.png",
+                    caption="Prometheus firing alerts",
+                )
+            else:
+                st.caption("_No capture yet — re-run investigation after `task setup:playwright`._")
+        with shot_cols[1]:
+            st.caption("ArgoCD")
+            if artifacts["argocd"]:
+                render_screenshot_image(
+                    record["id"],
+                    "argocd.png",
+                    caption="ArgoCD application",
+                )
+            else:
+                st.caption(
+                    "_No capture yet — re-run after ArgoCD port-forward "
+                    "(`:8080`); live login failures fall back to snapshot._"
+                )
+        with shot_cols[2]:
+            st.caption("Grafana")
+            if artifacts["grafana"]:
+                render_screenshot_image(
+                    record["id"],
+                    "grafana.png",
+                    caption="Grafana dashboard",
+                )
+            else:
+                st.caption(
+                    "_No capture yet — re-run investigation with Grafana on "
+                    "`:3000` (and Playwright: `task setup:playwright`)._"
+                )
+
+        st.divider()
         for ev in rca["evidence"]:
             link = f" — [link]({ev['deeplink']})" if ev.get("deeplink") else ""
             st.markdown(
@@ -438,71 +840,96 @@ def render_rca_panel(record: dict, rca: dict) -> None:
                 unsafe_allow_html=True,
             )
 
+    render_rca_discuss(record["id"], record)
+
 
 # ── Sidebar: investigations ───────────────────────────────────────────────
+
+CLUSTER_VIEW = "__cluster__"
+overview = api_get("/cluster/overview") or {}
+primary_service = overview.get("primary_service", "payments")
 
 with st.sidebar:
     st.markdown("## ⚓ Ballast")
     st.caption("GitOps incident response")
 
-    if st.button("＋ Investigate payments", use_container_width=True, type="primary"):
+    if st.button("Investigate problems", use_container_width=True, type="primary"):
         res = api_post(
             "/investigations",
-            {"alertname": "BallastServiceCrashLooping", "service": "payments"},
+            {"alertname": "BallastServiceCrashLooping", "service": primary_service},
         )
-        if res:
+        if res and res.get("_conflict"):
+            detail = res["_conflict"]
+            if detail.get("cluster_healthy") and not detail.get("alert_firing"):
+                st.session_state["all_good"] = True
+                st.session_state["selected"] = CLUSTER_VIEW
+            else:
+                st.session_state.pop("all_good", None)
+                hint = detail.get("hint") or "; ".join(detail.get("blockers") or [])
+                st.warning(hint)
+                existing = detail.get("existing_investigation_id")
+                if existing:
+                    st.session_state["selected"] = existing
+        elif res and res.get("id"):
+            st.session_state.pop("all_good", None)
             st.session_state["selected"] = res["id"]
 
     auto = st.checkbox("Live refresh", value=True)
     st.divider()
 
     investigations = api_get("/investigations") or []
-    if not investigations:
-        st.caption("No investigations yet.")
-        st.caption("Run `task break` or click above.")
-    else:
-        options = {rec["id"]: rec for rec in investigations}
-        ids = list(options.keys())
-        if "selected" not in st.session_state or st.session_state["selected"] not in ids:
-            st.session_state["selected"] = ids[0]
+    total_investigations = len(investigations)
+    if total_investigations > SIDEBAR_INVESTIGATION_LIMIT:
+        investigations = investigations[:SIDEBAR_INVESTIGATION_LIMIT]
+    options: dict[str, dict] = {CLUSTER_VIEW: {"id": CLUSTER_VIEW, "service": "cluster", "status": "overview"}}
+    for rec in investigations:
+        options[rec["id"]] = rec
 
-        def _label(iid: str) -> str:
-            rec = options[iid]
-            disp = "●" if rec["status"] in RUNNING else "○"
-            return f"{disp} {rec['service']} · {rec['status']}"
+    ids = [CLUSTER_VIEW] + [rec["id"] for rec in investigations]
+    if "selected" not in st.session_state or st.session_state["selected"] not in ids:
+        st.session_state["selected"] = CLUSTER_VIEW
 
-        st.radio(
-            "Investigations",
-            ids,
-            format_func=_label,
-            key="selected",
+    def _label(iid: str) -> str:
+        if iid == CLUSTER_VIEW:
+            return "◎ Cluster overview"
+        rec = options[iid]
+        disp = "●" if rec["status"] in RUNNING else "○"
+        return f"{disp} {rec['service']} · {rec['status']}"
+
+    st.radio("Views", ids, format_func=_label, key="selected")
+    if total_investigations > SIDEBAR_INVESTIGATION_LIMIT:
+        st.caption(
+            f"Showing latest {SIDEBAR_INVESTIGATION_LIMIT} of {total_investigations} investigations."
         )
 
-        rec = options[st.session_state["selected"]]
-        st.caption(rec["alertname"])
-        st.caption(fmt_dt(rec["created_at"]))
+    sel = st.session_state["selected"]
+    if sel != CLUSTER_VIEW and sel in options:
+        rec = options[sel]
+        st.caption(rec.get("alertname", ""))
+        st.caption(fmt_dt(rec.get("created_at")))
         st.caption(f"`{rec['id']}`")
+    elif not investigations:
+        st.caption("No investigations yet — use **Investigate problems** when an alert fires.")
 
     if st.session_state.get("api_error"):
         st.warning(st.session_state["api_error"])
 
 selected = st.session_state.get("selected")
-record = api_get(f"/investigations/{selected}") if selected else None
-argocd_live = (
-    api_get(f"/argocd/applications/{record['service']}")
-    if record
-    else None
-)
-kube_live = (
-    api_get(f"/kubernetes/services/{record['service']}")
-    if record
-    else None
-)
+cluster_mode = selected == CLUSTER_VIEW
+record = api_get(f"/investigations/{selected}") if selected and not cluster_mode else None
+argocd_live = api_get(f"/argocd/applications/{record['service']}", quiet=True) if record else None
+kube_live = api_get(f"/kubernetes/services/{record['service']}", quiet=True) if record else None
 
 # ── Main workspace ──────────────────────────────────────────────────────────
 
-if not record:
-    st.info("No investigation selected. Use the sidebar to open one or trigger a new investigation.")
+if cluster_mode:
+    st.markdown('<p class="ballast-section-head">Cluster overview</p>', unsafe_allow_html=True)
+    st.caption("Live health across deployments, ArgoCD, and Prometheus alerts.")
+    if st.session_state.pop("all_good", False):
+        st.success("Everything looks good! No firing alerts and workloads are healthy.")
+    render_cluster_overview(overview)
+elif not record:
+    st.info("Select **Cluster overview** in the sidebar or trigger **Investigate problems**.")
 else:
     head_l, head_r = st.columns([5, 1])
     with head_l:
@@ -516,28 +943,15 @@ else:
 
     brief = record.get("brief") or {}
     rollout = brief.get("rollout") or {}
-    crash = (kube_live or {}).get("crash_state") or rollout.get("crash_state") or {}
     rca = record.get("rca")
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    with m1:
-        st.metric("Service", record["service"])
-    with m2:
-        mem = (kube_live or {}).get("memory_limit") or rollout.get("current_memory_limit") or "—"
-        st.metric(
-            "Memory limit",
-            mem,
-            f"healthy {rollout.get('healthy_memory_limit', '—')}",
-        )
-    with m3:
-        reason = crash.get("display_state") or crash.get("waiting_reason") or "—"
-        ready_note = f"{crash.get('ready_pods', 0)}/{crash.get('pods', 0)} ready"
-        st.metric("Pod state", reason, f"{crash.get('restarts', 0)} restarts · {ready_note}")
-    with m4:
-        argo = argocd_live or brief.get("argocd") or {}
-        st.metric("ArgoCD sync", argo.get("sync_status") or "—", argo.get("last_sync_phase") or "—")
-    with m5:
-        st.metric("Investigator", (rca or {}).get("generated_by") or "pending")
+    render_service_stat_cards(
+        record["service"],
+        kube_live,
+        argocd_live or brief.get("argocd"),
+        rollout=rollout,
+        investigator=(rca or {}).get("generated_by") or "pending",
+    )
 
     if brief.get("degraded"):
         st.warning("Triage degraded: " + "; ".join(brief["degraded"]))
@@ -586,10 +1000,41 @@ else:
         if not rca:
             st.info("Root cause analysis will appear here when the investigation completes.")
             if record["status"] in RUNNING:
-                st.caption("Investigation in progress — check the Investigation tab for live activity.")
+                st.caption("Investigation in progress — timeline, evidence, and auto-fix PR will follow.")
+                if os.environ.get("BALLAST_AUTO_REMEDIATE", "0") == "1":
+                    st.caption(
+                        "When RCA recommends forward-fix: GitHub issue → Cursor agent → fix PR "
+                        "(links appear under Recommended action)."
+                    )
         else:
             render_rca_panel(record, rca)
 
+needs_refresh = False
 if record and record["status"] in RUNNING and selected and auto:
+    needs_refresh = True
+elif record and record.get("remediation_status") in (
+    "queued",
+    "creating_issue",
+    "launching_agent",
+) and not record.get("remediation_pr_url") and auto:
+    needs_refresh = True
+elif (
+    record
+    and auto
+    and record.get("github_issue_url")
+    and not record.get("remediation_pr_url")
+    and record.get("remediation_status") in ("complete", "failed")
+):
+    # PR may already exist on GitHub; GET reconciles from the issue timeline.
+    # Cap polling so a missing PR doesn't spin forever.
+    wait_key = f"pr_reconcile_waits_{record['id']}"
+    waits = int(st.session_state.get(wait_key, 0))
+    if waits < 40:  # ~60s at 1.5s interval
+        st.session_state[wait_key] = waits + 1
+        needs_refresh = True
+elif cluster_mode and auto:
+    needs_refresh = True
+
+if needs_refresh:
     time.sleep(1.5)
     st.rerun()

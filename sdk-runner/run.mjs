@@ -66,7 +66,7 @@ if (!prompt) {
 const runtime = (process.env.CURSOR_RUNTIME ?? "cloud").toLowerCase();
 const repoUrl = process.env.CURSOR_TARGET_REPO ?? "https://github.com/pete-leese/cursor-k8s-ballast";
 const ref = process.env.CURSOR_TARGET_REF ?? "main";
-const model = process.env.CURSOR_MODEL ?? "composer-2";
+const model = process.env.CURSOR_MODEL ?? "composer-2.5";
 const localCwd = process.env.CURSOR_LOCAL_CWD ?? REPO_ROOT;
 
 try {

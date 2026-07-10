@@ -109,7 +109,7 @@ class CursorInvestigator(Investigator):
             "CURSOR_TARGET_REPO", "https://github.com/pete-leese/cursor-k8s-ballast"
         )
         self.repo_ref = repo_ref or os.environ.get("CURSOR_TARGET_REF", "main")
-        self.model = model or os.environ.get("CURSOR_MODEL", "composer-2")
+        self.model = model or os.environ.get("CURSOR_MODEL", "composer-2.5")
 
     def investigate(self, brief: InvestigationBrief) -> Iterator[InvestigationEvent]:
         sdk_pkg = self.runner_dir / "node_modules" / "@cursor" / "sdk"

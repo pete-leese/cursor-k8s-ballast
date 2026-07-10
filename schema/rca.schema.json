@@ -60,7 +60,7 @@
       "type": "object"
     },
     "Evidence": {
-      "description": "A single supporting fact, tagged by source and optionally deep-linked\ninto Prometheus/Grafana/ArgoCD so an engineer can verify it in one click.",
+      "description": "A single supporting fact, tagged by source and optionally deep-linked\ninto Prometheus/Grafana/ArgoCD so an engineer can verify it in one click.\n\n``screenshot_url`` is optional \u2014 populated when an investigator attaches a\nUI capture (ArgoCD / Prometheus / Grafana) that the console can render inline.",
       "properties": {
         "source": {
           "$ref": "#/$defs/EvidenceSource"
@@ -80,6 +80,18 @@
           ],
           "default": null,
           "title": "Deeplink"
+        },
+        "screenshot_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Screenshot Url"
         }
       },
       "required": [

@@ -48,13 +48,13 @@ Runs on a Mac (Apple Silicon) with **Docker Desktop** + `kind`, `kubectl`,
 task setup            # python venv + engine deps
 task cluster:up       # kind + kube-prometheus-stack + ArgoCD + sync the 5 services
 task deploy           # re-run GitOps bootstrap only (idempotent)
-task break            # commit the bad chart bump; ArgoCD syncs -> CrashLoopBackOff
+task break            # open incident PR on main; merge when ready -> ArgoCD syncs
 
 # In another shell, expose Prometheus, then run the RCA:
 kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090 &
 task rca              # correlate rollout+alert+topology -> validated RCA
 
-task fix              # forward-fix: commit the restored memory limit
+task fix              # open forward-fix PR on main
 ```
 
 No cluster? Two offline paths (useful on hosts that can't run nested

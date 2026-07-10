@@ -85,11 +85,16 @@ class TimelineEvent(BaseModel):
 
 class Evidence(BaseModel):
     """A single supporting fact, tagged by source and optionally deep-linked
-    into Prometheus/Grafana/ArgoCD so an engineer can verify it in one click."""
+    into Prometheus/Grafana/ArgoCD so an engineer can verify it in one click.
+
+    ``screenshot_url`` is optional — populated when an investigator attaches a
+    UI capture (ArgoCD / Prometheus / Grafana) that the console can render inline.
+    """
 
     source: EvidenceSource
     detail: str
     deeplink: str | None = None
+    screenshot_url: str | None = None
 
 
 class RolloutCorrelation(BaseModel):

@@ -91,6 +91,9 @@ wait_for_monitoring_stack "${MONITORING_WAIT_TIMEOUT}"
 echo "==> Applying the CrashLoopBackOff alert rule"
 kubectl apply -f observability/prometheus-rule.yaml
 
+echo "==> Provisioning Ballast RCA Grafana dashboard"
+./scripts/apply-grafana-dashboard.sh
+
 if [ "${SKIP_ARGOCD:-0}" != "1" ]; then
   echo "==> Installing ArgoCD (namespace: argocd)"
   kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -

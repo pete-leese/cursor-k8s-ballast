@@ -29,7 +29,7 @@ if (!apiKey) {
 }
 const repoUrl = process.env.CURSOR_TARGET_REPO ?? "https://github.com/pete-leese/cursor-k8s-ballast";
 const ref = process.env.CURSOR_TARGET_REF ?? "main";
-const model = process.env.CURSOR_MODEL ?? "composer-2";
+const model = process.env.CURSOR_MODEL ?? "composer-2.5";
 
 const schema = readFileSync(join(__dir, "..", "schema", "rca.schema.json"), "utf8");
 

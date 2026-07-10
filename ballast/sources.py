@@ -43,12 +43,26 @@ class PrometheusSource:
         r.raise_for_status()
         return r.json().get("data", {}).get("alerts", [])
 
-    def firing_alert(self, alertname: str | None = None) -> dict | None:
-        """Return the first firing alert, optionally filtered by name."""
+    def firing_alert(
+        self,
+        alertname: str | None = None,
+        *,
+        service: str | None = None,
+        namespace: str | None = None,
+    ) -> dict | None:
+        """Return the first matching firing alert."""
         for alert in self.active_alerts():
             if alert.get("state") != "firing":
                 continue
-            if alertname and alert.get("labels", {}).get("alertname") != alertname:
+            labels = alert.get("labels", {})
+            if alertname and labels.get("alertname") != alertname:
+                continue
+            if service:
+                if labels.get("container") not in (service, None) and labels.get(
+                    "service"
+                ) not in (service, None):
+                    continue
+            if namespace and labels.get("namespace") not in (namespace, None):
                 continue
             return alert
         return None
@@ -81,7 +95,10 @@ class KubernetesSource:
         if self.context:
             cmd += ["--context", self.context]
         cmd += ["-n", self.namespace, *args, "-o", "json"]
-        out = subprocess.check_output(cmd, text=True)
+        try:
+            out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            return {}
         return json.loads(out)
 
     def rollout_time(self, service: str) -> datetime | None:
@@ -212,6 +229,8 @@ class KubernetesSource:
     def memory_limit(self, service: str) -> str | None:
         """Current ``resources.limits.memory`` of the deployment's container."""
         data = self._kubectl_json("get", "deploy", service)
+        if not data:
+            return None
         containers = (
             data.get("spec", {})
             .get("template", {})

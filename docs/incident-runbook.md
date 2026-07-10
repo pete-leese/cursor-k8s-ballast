@@ -17,13 +17,12 @@ depends on (see `topology.yaml`).
 ## 2. Ship the bad chart bump (a git commit ArgoCD syncs)
 
 ```bash
-./scripts/break.sh            # commits payments resources.limits.memory: 128Mi -> 16Mi
+task break                    # opens PR: payments 128Mi -> 16Mi (merge manually)
 ```
 
-This edits `deploy/services/payments.values.yaml`, commits, and pushes. ArgoCD
-detects the change and syncs it (`kubectl -n argocd get applications` shows
-`payments` OutOfSync → Synced). The new limit is below `payments`' ~40 MiB
-startup ballast, so the kubelet OOM-kills the container before it becomes ready.
+Branches from `main`, edits `deploy/services/payments.values.yaml`, and opens a
+GitHub PR. **Merge the PR** when ready — ArgoCD syncs from `targetRevision: main`.
+Optional: `BALLAST_AUTO_MERGE=1 task break` to squash-merge immediately.
 Within a few restart cycles:
 
 ```bash
@@ -63,7 +62,7 @@ The output is JSON validated against `ballast/contract.py`.
 ## 5. Remediate (the forward-fix the RCA recommends)
 
 ```bash
-./scripts/fix.sh              # commits payments resources.limits.memory -> 128Mi
+task fix                      # opens forward-fix PR on main (merge manually)
 kubectl -n ballast get pods -l app=payments   # ArgoCD syncs; back to Running/Ready
 ```
 
