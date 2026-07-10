@@ -1,7 +1,7 @@
 // Cursor Agent SDK smoke-test for k8s-ballast.
 //
 // Proves end-to-end that a Cursor *cloud* agent can clone this repo, investigate
-// the payments CrashLoopBackOff incident (bad chart bump lowering the memory
+// the ingest CrashLoopBackOff incident (bad chart bump lowering the memory
 // limit), reason about rollback vs forward-fix using topology.yaml for blast
 // radius, and return RCA JSON that matches ballast/contract.py.
 //
@@ -34,14 +34,14 @@ const model = process.env.CURSOR_MODEL ?? "composer-2.5";
 const schema = readFileSync(join(__dir, "..", "schema", "rca.schema.json"), "utf8");
 
 const prompt = `You are a codebase/infrastructure investigator, not a code generator.
-Investigate a production incident in the "payments" Kubernetes service in this repo.
+Investigate a production incident in the "ingest" Kubernetes service in this repo.
 
 Incident brief:
-- Alert: BallastServiceCrashLooping fired for the payments container in namespace ballast.
-- Symptom: payments pods are OOMKilled on startup (exit code 137) and stuck in CrashLoopBackOff.
+- Alert: StreamIngestCrashLooping fired for the ingest container in namespace ballast.
+- Symptom: ingest pods are OOMKilled on startup (exit code 137) and stuck in CrashLoopBackOff.
 - Suspected cause: a recent Helm chart bump lowered resources.limits.memory below the
   service's startup memory ballast. Look in charts/ballast-service and
-  deploy/services/payments.values.yaml, and the recent git history of that file.
+  deploy/services/ingest.values.yaml, and the recent git history of that file.
 
 Tasks:
 1. Identify the chart/values change that explains the crash (which field regressed, old vs new).

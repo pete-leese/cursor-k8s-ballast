@@ -1,6 +1,6 @@
-# ledger — depends on payments (topology.yaml).
-fullnameOverride: ledger
-replicaCount: 1
+# ingest — memory-heavy stream ingest (chunk buffers). Demo incident target.
+fullnameOverride: ingest
+replicaCount: 2
 ballastMb: 40
 service:
   version: "0.1.0"

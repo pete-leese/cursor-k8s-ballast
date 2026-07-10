@@ -86,7 +86,7 @@ class PrometheusSource:
 class KubernetesSource:
     """Reads rollout / crash state from the cluster via ``kubectl``."""
 
-    def __init__(self, namespace: str = "ballast", context: str | None = None):
+    def __init__(self, namespace: str = "demo", context: str | None = None):
         self.namespace = namespace
         self.context = context
 
@@ -215,6 +215,9 @@ class KubernetesSource:
 
         if summary["waiting_reason"]:
             summary["display_state"] = summary["waiting_reason"]
+        elif summary["pods"] == 0:
+            summary["display_state"] = "Missing"
+            summary["ready"] = False
         elif summary["pods"] and summary["ready"] and running == summary["pods"]:
             summary["display_state"] = "Running"
         elif summary["pods"] and summary["ready_pods"] == 0:

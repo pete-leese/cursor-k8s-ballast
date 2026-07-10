@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full demo — console + optional auto-investigation when BallastServiceCrashLooping fires.
+# Full demo — console + optional auto-investigation when StreamIngestCrashLooping fires.
 # Prereqs: task cluster:up, task deploy, task cluster:forward (separate terminal).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -15,7 +15,7 @@ echo "==> Prometheus OK at ${PROM}"
 echo "==> Starting console (alert watcher enabled)"
 echo "    1. Open http://localhost:8501"
 echo "    2. In another terminal: task break"
-echo "    3. Wait ~1m for BallastServiceCrashLooping — investigation auto-starts"
+echo "    3. Wait ~1m for StreamIngestCrashLooping — investigation auto-starts"
 echo
 
 export BALLAST_ALERT_WATCH=1

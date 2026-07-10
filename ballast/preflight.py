@@ -9,9 +9,14 @@ from pydantic import BaseModel, Field
 from .sources import ArgoCDSource, KubernetesSource, PrometheusSource
 from .store import STORE
 
-BALLAST_SERVICES = ["payments", "checkout", "orders", "notifications", "ledger"]
-DEFAULT_ALERT = os.environ.get("BALLAST_ALERTNAME", "BallastServiceCrashLooping")
-DEFAULT_NAMESPACE = os.environ.get("BALLAST_NAMESPACE", "ballast")
+BALLAST_SERVICES = ["ingest", "transcode", "playback", "recommendations", "catalog"]
+DEFAULT_ALERT = os.environ.get("BALLAST_ALERTNAME", "StreamIngestCrashLooping")
+# Demo fleet lives in `demo`; Ballast product stays in `ballast`.
+DEFAULT_NAMESPACE = os.environ.get(
+    "BALLAST_DEMO_NAMESPACE",
+    os.environ.get("BALLAST_NAMESPACE", "demo"),
+)
+PRODUCT_NAMESPACE = os.environ.get("BALLAST_PRODUCT_NAMESPACE", "ballast")
 
 
 class InvestigationPreflight(BaseModel):
@@ -57,7 +62,13 @@ def _service_health(service: str, namespace: str) -> dict:
         )
     except Exception as exc:
         row["healthy"] = False
+        row["pod_state"] = "Error"
         row["error"] = str(exc)
+    # Deployment missing entirely — kubectl returns empty, not an exception.
+    if row.get("total_pods") == 0 and not row.get("error"):
+        row["healthy"] = False
+        if row.get("pod_state") in (None, "Unknown", "Running", "Missing"):
+            row["pod_state"] = "Missing"
     try:
         argo = ArgoCDSource().application_context(service)
         if argo:
@@ -185,7 +196,7 @@ def assess_investigation_readiness(
     )
 
 
-def cluster_overview(primary_service: str = "payments") -> dict:
+def cluster_overview(primary_service: str = "ingest") -> dict:
     namespace = DEFAULT_NAMESPACE
     prom_url = os.environ.get("PROMETHEUS_URL", "http://localhost:9090")
     firing_alerts: list[dict] = []
@@ -205,13 +216,14 @@ def cluster_overview(primary_service: str = "payments") -> dict:
                 "namespace": labels.get("namespace"),
                 "severity": labels.get("severity"),
             }
-            # Scope the headline count to alerts about the Ballast demo's own
+            # Scope the headline count to alerts about the stream fleet's own
             # workloads — a kind cluster fires plenty of unrelated infra noise
             # (Watchdog heartbeat, control-plane TargetDown, etcd, clock skew)
             # that would otherwise make "firing alerts" look misleadingly high.
-            if labels.get("namespace") == namespace or (
-                labels.get("alertname") or ""
-            ).startswith("Ballast"):
+            aname = labels.get("alertname") or ""
+            if labels.get("namespace") == namespace or aname.startswith(
+                ("StreamIngest", "Ballast")
+            ):
                 firing_alerts.append(row)
             else:
                 infra_alerts.append(row)
@@ -234,14 +246,22 @@ def cluster_overview(primary_service: str = "payments") -> dict:
         DEFAULT_ALERT, primary_service, namespace=namespace
     )
     all_services_healthy = all(s.get("healthy") for s in services if "error" not in s)
-    argocd_ok = (
-        (argocd_primary or {}).get("sync_status") == "Synced"
-        and (argocd_primary or {}).get("health_status") == "Healthy"
-    )
+    # Helm-installed demos often show ArgoCD sync=Unknown while health is Healthy —
+    # only treat clear Argo problems as failing the board.
+    argocd_ok = True
+    if argocd_primary:
+        argo_health = argocd_primary.get("health_status")
+        argo_sync = argocd_primary.get("sync_status")
+        if argo_health in ("Degraded", "Missing", "Suspended"):
+            argocd_ok = False
+        elif argo_sync == "OutOfSync":
+            argocd_ok = False
 
     return {
         "primary_service": primary_service,
         "namespace": namespace,
+        "demo_namespace": namespace,
+        "product_namespace": PRODUCT_NAMESPACE,
         "healthy": all_services_healthy and not ballast_firing and argocd_ok,
         "investigation_ready": preflight.ready,
         "firing_alert_count": len(firing_alerts),

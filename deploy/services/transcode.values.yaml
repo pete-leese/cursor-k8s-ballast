@@ -1,5 +1,5 @@
-# orders — depends on payments and checkout (topology.yaml).
-fullnameOverride: orders
+# transcode — depends on ingest
+fullnameOverride: transcode
 replicaCount: 1
 ballastMb: 40
 service:

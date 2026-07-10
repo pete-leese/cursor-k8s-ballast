@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Ballast">
+  <rect width="64" height="64" rx="12" fill="#0b1220"/>
+  <path fill="none" stroke="#2dd4bf" stroke-width="4" stroke-linecap="round"
+        d="M14 40c6-12 14-18 18-18s12 6 18 18"/>
+  <path fill="none" stroke="#2dd4bf" stroke-width="3.5" stroke-linecap="round"
+        d="M20 38c4-8 9-12 12-12s8 4 12 12"/>
+  <path fill="none" stroke="#2dd4bf" stroke-width="3" stroke-linecap="round"
+        d="M26 36c2.5-5 5-7 6-7s3.5 2 6 7"/>
+  <circle cx="32" cy="40" r="3.5" fill="#2dd4bf"/>
+</svg>

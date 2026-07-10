@@ -1,21 +1,21 @@
 # From CrashLoop to Fix PR: Investigating a Kubernetes Incident with Cursor
 
-*How we used Cursor Cloud Agents, Bugbot, screenshots, and auto-remediation to turn a GitOps outage into a closed loop — investigate → explain → fix.*
+*How we used Cursor Cloud Agents, Bugbot, screenshots, and auto-remediation to turn a GitOps outage on a **media-streaming fleet** into a closed loop — triage → verdict → fix PR.*
 
 ---
 
 **Subtitle / deck (optional):**  
-A hands-on walkthrough of Cursor as an incident-response copilot for Kubernetes and ArgoCD — not just “AI that writes YAML.”
+A hands-on walkthrough of Cursor as an incident-response copilot for Kubernetes and ArgoCD — CrashLoopBackOff on stream **ingest**, not an app-latency fintech demo.
 
-**Tags (Medium):** `Cursor` · `Kubernetes` · `GitOps` · `DevOps` · `AI Agents` · `SRE`
+**Tags (Medium):** `Cursor` · `Kubernetes` · `GitOps` · `DevOps` · `AI Agents` · `SRE` · `Streaming`
 
 **Canonical demo repo:** [cursor-k8s-ballast](https://github.com/pete-leese/cursor-k8s-ballast) *(update URL if needed)*
 
 ---
 
-<!-- MEDIUM: Cover image — wide hero of the Ballast console Cluster overview (healthy or incident state) -->
-![Cover: Ballast console — cluster overview](SCREENSHOT_PLACEHOLDER_cover_cluster_overview.png)
-*Caption: The Ballast console landing on live cluster / ArgoCD / alert health — before you dig into a single investigation.*
+<!-- MEDIUM: Cover image — wide hero of the Ballast Fleet board -->
+![Cover: Ballast console — fleet board](SCREENSHOT_PLACEHOLDER_cover_fleet_board.png)
+*Caption: The Ballast console landing on fleet / ArgoCD / alert health — before you open an episode.*
 
 ---
 
@@ -41,12 +41,12 @@ That’s what **cursor-k8s-ballast** is for: a small GitOps lab where Cursor isn
 
 ## The incident (in one paragraph)
 
-Five interdependent services ship via **Helm + ArgoCD**. We open a “bad chart bump” PR that lowers `payments` memory limit below its startup working set. After merge, ArgoCD syncs, the kubelet **OOM-kills** the container, pods enter **CrashLoopBackOff**, and Prometheus fires **`BallastServiceCrashLooping`**.
+Five interdependent services ship via **Helm + ArgoCD**. We open a “bad chart bump” PR that lowers `ingest` memory limit below its startup working set. After merge, ArgoCD syncs, the kubelet **OOM-kills** the container, pods enter **CrashLoopBackOff**, and Prometheus fires **`StreamIngestCrashLooping`**.
 
 The question isn’t “what’s wrong?” — it’s whether an agent can **correlate rollout ↔ alert**, respect **blast radius**, recommend **forward-fix vs rollback**, and then **file an issue + open a fix PR** without mutating the cluster by hand.
 
-<!-- MEDIUM: Side-by-side — healthy payments pods vs CrashLoopBackOff after break -->
-![Before/after: payments pods](SCREENSHOT_PLACEHOLDER_pods_before_after.png)
+<!-- MEDIUM: Side-by-side — healthy ingest pods vs CrashLoopBackOff after break -->
+![Before/after: ingest pods](SCREENSHOT_PLACEHOLDER_pods_before_after.png)
 *Caption: Left: healthy. Right: CrashLoopBackOff after the bad memory limit lands on `main`.*
 
 ---
@@ -147,9 +147,9 @@ That’s the product story: Cursor doesn’t just narrate the outage — it **pr
 In one run of the demo, remediation produced:
 
 - **Issue:** [#24](https://github.com/pete-leese/cursor-k8s-ballast/issues/24) — RCA-backed incident write-up  
-- **Fix PR:** [#25](https://github.com/pete-leese/cursor-k8s-ballast/pull/25) — `fix(payments): restore memory limit to 128Mi (Ballast RCA)`
+- **Fix PR:** [#25](https://github.com/pete-leese/cursor-k8s-ballast/pull/25) — `fix(ingest): restore memory limit to 128Mi (Ballast RCA)`
 
-PR #25 is a one-line GitOps fix (`16Mi` → `128Mi` in `deploy/services/payments.values.yaml`), authored by the **Cursor Agent**, with a body that links the issue and explains *why forward-fix beats rollback* (single-field regression; avoid disrupting `checkout` / `ledger` / `notifications` / `orders`).
+PR #25 is a one-line GitOps fix (`16Mi` → `128Mi` in `deploy/services/ingest.values.yaml`), authored by the **Cursor Agent**, with a body that links the issue and explains *why forward-fix beats rollback* (single-field regression; avoid disrupting `transcode` / `catalog` / `recommendations` / `playback`).
 
 The PR also ships with Cursor’s **Open in Web / Open in Cursor** affordances — the same agent run is one click away from the IDE.
 
@@ -223,16 +223,19 @@ Cursor accelerates investigation and authoring. **Git remains the control plane.
 
 ## What “good” looks like in the console
 
-When nothing’s wrong, Ballast shouldn’t invent an incident. The default view is **cluster overview**: service health, ArgoCD sync, **Ballast-related** firing alerts (not kind control-plane noise). **Investigate problems** only deep-dives when the crashloop alert is actually firing — otherwise: *everything looks good.*
+When nothing’s wrong, Ballast shouldn’t invent an incident. The default view is
+**Fleet board**: pipeline health, ArgoCD sync, **stream-related** firing alerts
+(not kind control-plane noise). **Triage fleet** only deep-dives when
+`StreamIngestCrashLooping` is actually firing — otherwise: *fleet looks good.*
 
 When something *is* wrong, one investigation should cover the episode — not a new run every 15 seconds while the alert stays open.
 
-<!-- MEDIUM: Cluster overview — everything looks good -->
-![Healthy cluster overview](SCREENSHOT_PLACEHOLDER_overview_healthy.png)
+<!-- MEDIUM: Fleet board — everything looks good -->
+![Healthy fleet board](SCREENSHOT_PLACEHOLDER_overview_healthy.png)
 *Caption: Green path — no Ballast alerts, workloads healthy.*
 
-<!-- MEDIUM: Cluster overview — BallastServiceCrashLooping firing -->
-![Incident cluster overview](SCREENSHOT_PLACEHOLDER_overview_incident.png)
+<!-- MEDIUM: Fleet board — StreamIngestCrashLooping firing -->
+![Incident fleet board](SCREENSHOT_PLACEHOLDER_overview_incident.png)
 *Caption: Incident path — investigate once, dig into timeline / evidence / root cause / fix PR.*
 
 ---
@@ -248,7 +251,7 @@ task console                   # Ballast API + UI
 
 task break                     # open incident PR → merge to main
 # wait for CrashLoop + alert
-# click Investigate problems (or let alert watch start one run)
+# click Triage fleet (or let alert watch start one run)
 
 # with CURSOR_API_KEY + BALLAST_AUTO_REMEDIATE=1:
 # issue + fix PR appear under Recommended action
@@ -277,7 +280,7 @@ Use this list when assembling the Medium draft in the UI (Medium prefers uploade
 
 | Placeholder file | Suggested shot |
 |---|---|
-| `SCREENSHOT_PLACEHOLDER_cover_cluster_overview.png` | Ballast UI, cluster overview |
+| `SCREENSHOT_PLACEHOLDER_cover_cluster_overview.png` | Ballast UI, fleet board |
 | `SCREENSHOT_PLACEHOLDER_architecture_diagram.png` | Architecture / sequence diagram |
 | `SCREENSHOT_PLACEHOLDER_pods_before_after.png` | `kubectl get pods` before/after break |
 | `SCREENSHOT_PLACEHOLDER_cloud_agent_investigation.png` | cursor.com agent run |

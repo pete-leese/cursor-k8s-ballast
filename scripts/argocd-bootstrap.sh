@@ -29,7 +29,7 @@ done
 
 echo "==> ArgoCD will now sync the child apps. Watch with:"
 echo "    kubectl -n argocd get applications"
-echo "    kubectl -n ballast get pods -w"
+echo "    kubectl -n demo get pods -w"
 echo
 if [ "${ARGOCD_TARGET_REVISION}" != "main" ]; then
   echo "==> Note: tracking branch '${ARGOCD_TARGET_REVISION}' (not main)."

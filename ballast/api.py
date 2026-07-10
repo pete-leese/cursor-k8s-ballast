@@ -23,8 +23,8 @@ from .store import STORE, InvestigationRecord, InvestigationStatus
 app = FastAPI(title="Ballast API")
 
 _WEBHOOK_SECRET = os.environ.get("BALLAST_WEBHOOK_SECRET", "")
-_DEFAULT_ALERT = os.environ.get("BALLAST_ALERTNAME", "BallastServiceCrashLooping")
-_DEFAULT_SERVICE = os.environ.get("BALLAST_SERVICE", "payments")
+_DEFAULT_ALERT = os.environ.get("BALLAST_ALERTNAME", "StreamIngestCrashLooping")
+_DEFAULT_SERVICE = os.environ.get("BALLAST_SERVICE", "ingest")
 _WATCH_ALERTS = os.environ.get("BALLAST_ALERT_WATCH", "0") == "1"
 _WATCH_INTERVAL = int(os.environ.get("BALLAST_ALERT_WATCH_INTERVAL", "15"))
 
@@ -66,7 +66,7 @@ def _watch_alerts() -> None:
     while True:
         try:
             prom = PrometheusSource(prom_url)
-            alert = prom.firing_alert(_DEFAULT_ALERT, namespace="ballast")
+            alert = prom.firing_alert(_DEFAULT_ALERT, namespace="demo")
             if not alert:
                 time.sleep(_WATCH_INTERVAL)
                 continue
@@ -77,7 +77,7 @@ def _watch_alerts() -> None:
                 or _DEFAULT_SERVICE
             )
             pf = assess_investigation_readiness(
-                _DEFAULT_ALERT, service, namespace="ballast"
+                _DEFAULT_ALERT, service, namespace="demo"
             )
             if not pf.ready:
                 time.sleep(_WATCH_INTERVAL)
@@ -209,6 +209,38 @@ def trigger_remediation(investigation_id: str):
         raise HTTPException(status_code=404, detail="not found")
     if record.rca is None:
         raise HTTPException(status_code=400, detail="RCA not ready")
+    if record.remediation_pr_url:
+        return {
+            "status": "complete",
+            "github_issue_url": record.github_issue_url,
+            "remediation_pr_url": record.remediation_pr_url,
+            "reused": True,
+        }
+    # Reuse issue/PR from a prior investigation of the same alert episode.
+    prior = STORE.find_remediation_for_episode(
+        record.alertname, record.service, record.alert_fired_at
+    )
+    if prior and prior.id != investigation_id and (
+        prior.github_issue_url or prior.remediation_pr_url
+    ):
+        STORE.update(
+            investigation_id,
+            github_issue_url=prior.github_issue_url,
+            remediation_issue_created_at=prior.remediation_issue_created_at,
+            remediation_pr_url=prior.remediation_pr_url,
+            remediation_pr_opened_at=prior.remediation_pr_opened_at,
+            remediation_pr_merged_at=prior.remediation_pr_merged_at,
+            remediation_agent_id=prior.remediation_agent_id,
+            remediation_status="complete",
+            remediation_error=None,
+        )
+        return {
+            "status": "complete",
+            "github_issue_url": prior.github_issue_url,
+            "remediation_pr_url": prior.remediation_pr_url,
+            "reused": True,
+            "from_investigation_id": prior.id,
+        }
     if record.remediation_status in ("queued", "creating_issue", "launching_agent"):
         return {
             "status": record.remediation_status,
@@ -280,7 +312,7 @@ def post_chat(investigation_id: str, body: ChatRequest):
         pass
     try:
         kube = KubernetesSource(
-            namespace=record.brief.namespace if record.brief else "ballast"
+            namespace=record.brief.namespace if record.brief else "demo"
         )
         kube_ctx = {
             "crash_state": kube.crash_state(record.service),
@@ -331,7 +363,7 @@ def get_argocd_application(service: str):
 
 
 @app.get("/kubernetes/services/{service}")
-def get_service_state(service: str, namespace: str = "ballast"):
+def get_service_state(service: str, namespace: str = "demo"):
     try:
         kube = KubernetesSource(namespace=namespace)
         crash = kube.crash_state(service)

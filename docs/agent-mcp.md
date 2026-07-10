@@ -45,12 +45,12 @@ All tools are read-only — nothing mutates the cluster.
 
 ## A typical agent flow
 
-1. `get_firing_alerts()` → sees `BallastServiceCrashLooping` for `payments`.
-2. `rollout_status("payments")` → rollout timestamp + `OOMKilled` crash state.
-3. `query_prometheus('kube_pod_container_status_waiting_reason{namespace="ballast",reason="CrashLoopBackOff"}')`
+1. `get_firing_alerts()` → sees `StreamIngestCrashLooping` for `ingest`.
+2. `rollout_status("ingest")` → rollout timestamp + `OOMKilled` crash state.
+3. `query_prometheus('kube_pod_container_status_waiting_reason{namespace="demo",reason="CrashLoopBackOff"}')`
    → confirms the CrashLoopBackOff signal.
-4. `blast_radius("payments")` → `checkout, ledger, notifications, orders`.
-5. `run_rca("payments")` → a validated RCA recommending `forward_fix`.
+4. `blast_radius("ingest")` → `transcode, catalog, recommendations, playback`.
+5. `run_rca("ingest")` → a validated RCA recommending `forward_fix`.
 
 The agent is a *codebase/infra investigator*, not a code generator: the product
 is the RCA. The read-only Grafana MCP (`.mcp.json`) can be added for the same

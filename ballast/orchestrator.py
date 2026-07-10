@@ -37,7 +37,7 @@ def run_investigation(
     alert: AlertContext,
     service: str,
     *,
-    namespace: str = "ballast",
+    namespace: str = "demo",
     healthy_memory: str | None = None,
     repo: RepoTarget | None = None,
 ) -> None:

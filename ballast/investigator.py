@@ -62,7 +62,7 @@ class MockInvestigator(Investigator):
     """Replays a canned-but-realistic RCA from a fixture."""
 
     def __init__(self, fixture_path: str | Path | None = None) -> None:
-        self.fixture = Path(fixture_path or _ROOT / "fixtures" / "rca_payments.json")
+        self.fixture = Path(fixture_path or _ROOT / "fixtures" / "rca_ingest.json")
 
     def rca(self, *, service: str, investigation_id: str) -> RCA:
         rca = RCA.model_validate_json(self.fixture.read_text())
@@ -76,7 +76,7 @@ class MockInvestigator(Investigator):
         yield InvestigationEvent(
             type="tool_call",
             name="read_file",
-            status="deploy/services/payments.values.yaml",
+            status="deploy/services/ingest.values.yaml",
         )
         yield InvestigationEvent(
             type="tool_call",

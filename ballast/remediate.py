@@ -238,11 +238,69 @@ def _watch_pr_open(
 
 def run_remediation(investigation_id: str, rca: RCA) -> None:
     try:
+        current = STORE.get(investigation_id)
+        if current is None:
+            return
+
+        # Already have a PR for this investigation — do not open another.
+        if current.remediation_pr_url:
+            STORE.update(
+                investigation_id,
+                remediation_status="complete",
+                remediation_error=None,
+            )
+            _watch_pr_merge(investigation_id, current.remediation_pr_url)
+            return
+
+        # Same alert episode already filed an issue/PR on a prior (or sibling) run.
+        prior = STORE.find_remediation_for_episode(
+            current.alertname, current.service, current.alert_fired_at
+        )
+        if (
+            prior
+            and prior.id != investigation_id
+            and (prior.github_issue_url or prior.remediation_pr_url)
+        ):
+            updates: dict = {
+                "github_issue_url": prior.github_issue_url,
+                "remediation_issue_created_at": prior.remediation_issue_created_at
+                or _now(),
+                "remediation_pr_url": prior.remediation_pr_url,
+                "remediation_pr_opened_at": prior.remediation_pr_opened_at,
+                "remediation_pr_merged_at": prior.remediation_pr_merged_at,
+                "remediation_agent_id": prior.remediation_agent_id,
+                "remediation_status": "complete",
+                "remediation_error": (
+                    None
+                    if prior.remediation_pr_url
+                    else "Reused existing GitHub issue for this alert episode"
+                ),
+            }
+            STORE.update(investigation_id, **updates)
+            if prior.remediation_pr_url:
+                _watch_pr_merge(investigation_id, prior.remediation_pr_url)
+            elif prior.github_issue_url:
+                _watch_pr_open(investigation_id, prior.github_issue_url)
+            return
+
+        # Issue already on this record — skip create; resume PR discovery / agent.
+        issue_url: str | None = None
+        if current.github_issue_url and not current.remediation_pr_url:
+            issue_url = current.github_issue_url
+            pr_url, opened_at = _discover_pr_for_issue(issue_url)
+            if pr_url:
+                _record_pr(
+                    investigation_id,
+                    pr_url,
+                    opened_at=opened_at,
+                    agent_id=current.remediation_agent_id,
+                )
+                return
+
         STORE.update(
             investigation_id,
-            remediation_status="creating_issue",
-            remediation_queued_at=STORE.get(investigation_id).remediation_queued_at
-            or _now(),
+            remediation_status="launching_agent" if issue_url else "creating_issue",
+            remediation_queued_at=current.remediation_queued_at or _now(),
             remediation_error=None,
         )
 
@@ -252,31 +310,34 @@ def run_remediation(investigation_id: str, rca: RCA) -> None:
         rca_path = Path(f"/tmp/ballast-rca-{investigation_id}.json")
         rca_path.write_text(rca.model_dump_json(indent=2))
 
-        title = (
-            f"INCIDENT: {rca.service} — {rca.summary[:120]}"
-            if rca.summary
-            else f"INCIDENT: {rca.service}"
-        )
-        body_proc = _run_cmd(["./scripts/format-rca-issue.sh", str(rca_path)])
-        if body_proc.returncode != 0:
-            raise RuntimeError(body_proc.stderr.strip() or "format-rca-issue failed")
+        if not issue_url:
+            title = (
+                f"INCIDENT: {rca.service} — {rca.summary[:120]}"
+                if rca.summary
+                else f"INCIDENT: {rca.service}"
+            )
+            body_proc = _run_cmd(["./scripts/format-rca-issue.sh", str(rca_path)])
+            if body_proc.returncode != 0:
+                raise RuntimeError(body_proc.stderr.strip() or "format-rca-issue failed")
 
-        issue_proc = _run_cmd(
-            ["gh", "issue", "create", "--title", title, "--body", body_proc.stdout],
-        )
-        if issue_proc.returncode != 0:
-            raise RuntimeError(issue_proc.stderr.strip() or "gh issue create failed")
+            issue_proc = _run_cmd(
+                ["gh", "issue", "create", "--title", title, "--body", body_proc.stdout],
+            )
+            if issue_proc.returncode != 0:
+                raise RuntimeError(issue_proc.stderr.strip() or "gh issue create failed")
 
-        issue_url = issue_proc.stdout.strip()
-        if not issue_url.startswith("http"):
-            raise RuntimeError(f"unexpected gh issue output: {issue_url!r}")
+            issue_url = issue_proc.stdout.strip()
+            if not issue_url.startswith("http"):
+                raise RuntimeError(f"unexpected gh issue output: {issue_url!r}")
 
-        STORE.update(
-            investigation_id,
-            github_issue_url=issue_url,
-            remediation_issue_created_at=_now(),
-            remediation_status="launching_agent",
-        )
+            STORE.update(
+                investigation_id,
+                github_issue_url=issue_url,
+                remediation_issue_created_at=_now(),
+                remediation_status="launching_agent",
+            )
+        else:
+            STORE.update(investigation_id, remediation_status="launching_agent")
 
         if not os.environ.get("CURSOR_API_KEY"):
             STORE.update(

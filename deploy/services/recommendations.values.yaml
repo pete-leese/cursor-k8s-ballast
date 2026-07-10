@@ -1,5 +1,5 @@
-# notifications — depends on orders (topology.yaml).
-fullnameOverride: notifications
+# recommendations — streaming fleet service (see topology.yaml).
+fullnameOverride: recommendations
 replicaCount: 1
 ballastMb: 40
 service:

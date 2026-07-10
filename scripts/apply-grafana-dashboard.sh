@@ -34,5 +34,5 @@ awk '
 ' "${tmp}" | kubectl apply -f -
 
 echo "==> Done. Sidecar usually reloads within ~60s."
-echo "    URL: http://localhost:3000/d/ballast-rca?orgId=1&var-namespace=ballast&var-container=payments&from=now-30m&to=now"
+echo "    URL: http://localhost:3000/d/ballast-rca?orgId=1&var-namespace=demo&var-container=ingest&from=now-30m&to=now"
 echo "    (port-forward: task cluster:forward)"

@@ -1,5 +1,5 @@
-# checkout — depends on payments (topology.yaml).
-fullnameOverride: checkout
+# playback — streaming fleet service (see topology.yaml).
+fullnameOverride: playback
 replicaCount: 1
 ballastMb: 40
 service:

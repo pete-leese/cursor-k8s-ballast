@@ -4,7 +4,7 @@
 
 `cursor-k8s-ballast` is a GitOps/Kubernetes RCA demo: Helm charts + ArgoCD
 manifests for five interdependent services, a deliberately bad chart bump that
-drives `payments` into CrashLoopBackOff, and a Python RCA engine (`ballast/`)
+drives `ingest` into CrashLoopBackOff, and a Python RCA engine (`ballast/`)
 that correlates the rollout timestamp with the alert and recommends rollback vs
 forward-fix. Standard commands live in `README.md` and `Taskfile.yml`; the
 end-to-end walkthrough is `docs/incident-runbook.md`. Only the non-obvious
@@ -55,7 +55,7 @@ works); `sudo docker ...` always works.
    (`python:3.12-alpine`, mount at `/app/app.py`) and curl `/healthz` + `/metrics`.
 3. RCA engine end-to-end against a **real** Prometheus:
    `task rca:offline` (or `./scripts/offline-rca-demo.sh`) stands up Prometheus +
-   a kube-state-metrics stub, waits for `BallastServiceCrashLooping` to fire,
+   a kube-state-metrics stub, waits for `StreamIngestCrashLooping` to fire,
    then runs the engine against the live alert. `task rca:mock` replays the
    fixture through contract validation.
    - The engine's `--rollout-at`, `--current-memory`, `--simulate-oom` flags feed
@@ -72,9 +72,9 @@ GitOps via ArgoCD is the deploy path:
   **ArgoCD tracks `main`** (targetRevision), so the branch must be pushed/merged
   there, or edit `targetRevision` in `deploy/argocd/*.yaml`.
 - `./scripts/break.sh` / `./scripts/fix.sh` are **git-commit driven**: they edit
-  `deploy/services/payments.values.yaml` (`limits.memory` via `awk`, preserving
+  `deploy/services/ingest.values.yaml` (`limits.memory` via `awk`, preserving
   the rest), commit, and push to the current branch; ArgoCD syncs the change.
-  `break.sh` → `16Mi` → OOMKill → CrashLoopBackOff → `BallastServiceCrashLooping`
+  `break.sh` → `16Mi` → OOMKill → CrashLoopBackOff → `StreamIngestCrashLooping`
   after `for: 1m`; `fix.sh` → `128Mi`.
 - `task rca` after `kubectl -n monitoring port-forward
   svc/kube-prometheus-stack-prometheus 9090`.

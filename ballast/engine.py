@@ -65,7 +65,7 @@ def assemble_brief(
     healthy_memory: str | None,
     repo_url: str,
     repo_ref: str = "main",
-    alertname: str = "BallastServiceCrashLooping",
+    alertname: str = "StreamIngestCrashLooping",
     argocd: ArgoCDSource | None = None,
 ) -> InvestigationBrief:
     """Run triage and assemble the brief, degrading (never crashing) per source."""

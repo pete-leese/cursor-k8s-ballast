@@ -51,7 +51,7 @@ const runtime = (process.env.CURSOR_RUNTIME ?? "cloud").toLowerCase();
 const repoUrl = process.env.CURSOR_TARGET_REPO ?? "https://github.com/pete-leese/cursor-k8s-ballast";
 const ref = process.env.CURSOR_TARGET_REF ?? "main";
 const model = process.env.CURSOR_MODEL ?? "composer-2.5";
-const service = rca.service ?? "payments";
+const service = rca.service ?? "ingest";
 const healthy = rca.resource_change?.previous ?? process.env.BALLAST_HEALTHY_MEMORY ?? "128Mi";
 const valuesPath = `deploy/services/${service}.values.yaml`;
 

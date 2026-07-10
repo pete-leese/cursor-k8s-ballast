@@ -231,7 +231,7 @@ def grafana_dashboard_url(service: str | None = None) -> str:
     if custom:
         if service and "var-container=" not in custom and "var-pod=" not in custom:
             sep = "&" if "?" in custom else "?"
-            return f"{custom}{sep}var-namespace=ballast&var-container={service}"
+            return f"{custom}{sep}var-namespace=demo&var-container={service}"
         return custom
     base = os.environ.get("GRAFANA_URL", "http://localhost:3000").rstrip("/")
     uid = os.environ.get("GRAFANA_DASHBOARD_UID", "ballast-rca")
@@ -242,12 +242,12 @@ def grafana_dashboard_url(service: str | None = None) -> str:
         "to=now",
         "refresh=15s",
         "kiosk",
-        "var-namespace=ballast",
+        "var-namespace=demo",
     ]
     if service:
         params.append(f"var-container={service}")
     else:
-        params.append("var-container=payments")
+        params.append("var-container=ingest")
     return f"{base}/d/{uid}?{'&'.join(params)}"
 
 

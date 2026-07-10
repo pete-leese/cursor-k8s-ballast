@@ -1,7 +1,7 @@
 """Command-line entrypoint for the ballast RCA engine.
 
-    python -m ballast.cli investigate --service payments --healthy-memory 128Mi
-    python -m ballast.cli blast-radius payments
+    python -m ballast.cli investigate --service ingest --healthy-memory 128Mi
+    python -m ballast.cli blast-radius ingest
     python -m ballast.cli schema > schema/rca.schema.json
 
 ``investigate`` runs live triage against Prometheus + the cluster, correlates the
@@ -109,13 +109,13 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     inv = sub.add_parser("investigate", help="run triage + produce an RCA")
-    inv.add_argument("--service", default="payments")
-    inv.add_argument("--namespace", default="ballast")
+    inv.add_argument("--service", default="ingest")
+    inv.add_argument("--namespace", default="demo")
     inv.add_argument("--healthy-memory", default="128Mi",
                      help="the known-good memory limit (for the resource diff)")
     inv.add_argument("--prometheus-url", default=os.environ.get(
         "PROMETHEUS_URL", "http://localhost:9090"))
-    inv.add_argument("--alertname", default="BallastServiceCrashLooping")
+    inv.add_argument("--alertname", default="StreamIngestCrashLooping")
     inv.add_argument("--window", type=int, default=600,
                      help="rollout<->alert correlation window in seconds")
     inv.add_argument("--chart-version-from", default=None)

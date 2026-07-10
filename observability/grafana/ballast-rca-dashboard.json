@@ -30,7 +30,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "description": "kube_pod_container_status_waiting_reason{reason=\"CrashLoopBackOff\"} — the BallastServiceCrashLooping alert signal.",
+      "description": "kube_pod_container_status_waiting_reason{reason=\"CrashLoopBackOff\"} — the StreamIngestCrashLooping alert signal.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -601,7 +601,7 @@
         "type": "datasource"
       },
       {
-        "current": { "selected": true, "text": "ballast", "value": "ballast" },
+        "current": { "selected": true, "text": "demo", "value": "demo" },
         "datasource": { "type": "prometheus", "uid": "${datasource}" },
         "definition": "label_values(kube_pod_info, namespace)",
         "hide": 0,
@@ -616,7 +616,7 @@
         "type": "query"
       },
       {
-        "current": { "selected": true, "text": "payments", "value": "payments" },
+        "current": { "selected": true, "text": "ingest", "value": "ingest" },
         "datasource": { "type": "prometheus", "uid": "${datasource}" },
         "definition": "label_values(kube_pod_container_info{namespace=\"$namespace\"}, container)",
         "hide": 0,

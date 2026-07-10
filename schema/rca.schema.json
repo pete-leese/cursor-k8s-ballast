@@ -333,7 +333,7 @@
       "type": "string"
     },
     "namespace": {
-      "default": "ballast",
+      "default": "demo",
       "title": "Namespace",
       "type": "string"
     },

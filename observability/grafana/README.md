@@ -20,7 +20,7 @@ Kube-state-metrics + cAdvisor panels used as RCA evidence screenshots:
 | Waiting / terminated reasons | time series by `reason` |
 | CPU | `container_cpu_usage_seconds_total` |
 
-Variables: **namespace** (default `ballast`), **container** / service (default `payments`).
+Variables: **namespace** (default `demo`), **container** / service (default `ingest`).
 
 ## Apply / refresh
 
@@ -32,7 +32,7 @@ Variables: **namespace** (default `ballast`), **container** / service (default `
 Open (with port-forward):
 
 ```text
-http://localhost:3000/d/ballast-rca?orgId=1&var-namespace=ballast&var-container=payments&from=now-30m&to=now&kiosk
+http://localhost:3000/d/ballast-rca?orgId=1&var-namespace=demo&var-container=ingest&from=now-30m&to=now&kiosk
 ```
 
 Ballast screenshot capture uses this UID by default (`GRAFANA_DASHBOARD_UID=ballast-rca`).

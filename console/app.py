@@ -1,7 +1,7 @@
-"""Ballast console — enterprise RCA investigation view.
+"""Ballast console — Kubernetes incident response for GitOps fleets.
 
-Sidebar: investigation list and actions.
-Main: tabbed full-width workspace (Timeline · GitOps · Investigation · Root cause).
+Sidebar: cluster overview + investigation list.
+Main: Verdict · Signal trail · GitOps · Agent feed.
 
 Reads from the Ballast API (BALLAST_API_URL).
 """
@@ -16,22 +16,33 @@ from datetime import datetime
 import requests
 import streamlit as st
 
-from theme import badge_inline, html_panel, inject_styles, pane_title, streamlit_badge_color
+from theme import (
+    LOGO_PNG,
+    badge_inline,
+    brand_block,
+    html_panel,
+    inject_styles,
+    masthead,
+    mdi,
+    pane_title,
+    stage_pills,
+    streamlit_badge_color,
+)
 
 API = os.environ.get("BALLAST_API_URL", "http://localhost:8000")
 RUNNING = {"queued", "triaging", "investigating"}
 SIDEBAR_INVESTIGATION_LIMIT = 12
 
-# Palette
-BLUE, GREEN, RED, AMBER, SLATE, INDIGO, TEAL = (
-    "#1d4ed8",
-    "#15803d",
-    "#b91c1c",
-    "#b45309",
-    "#475569",
-    "#4338ca",
+# Palette — ink + teal (streaming ops), not causa-slate / purple SaaS
+BLUE, GREEN, RED, AMBER, SLATE, TEAL = (
     "#0f766e",
+    "#047857",
+    "#be123c",
+    "#b45309",
+    "#4b5563",
+    "#0d9488",
 )
+ACCENT = "#115e59"
 STATUS_COLOR = {
     "complete": GREEN,
     "failed": RED,
@@ -55,7 +66,7 @@ ACTION_COLOR = {
 }
 EVENT_COLOR = {
     "status": SLATE,
-    "thinking": INDIGO,
+    "thinking": ACCENT,
     "tool_call": BLUE,
     "assistant": TEAL,
     "error": RED,
@@ -64,15 +75,20 @@ EVENT_COLOR = {
 KIND_COLOR = {
     "alert": RED,
     "rollout": BLUE,
-    "chart_bump": INDIGO,
+    "chart_bump": ACCENT,
     "crashloop": RED,
     "note": SLATE,
     "argocd": TEAL,
-    "investigation": INDIGO,
+    "investigation": ACCENT,
     "remediation": GREEN,
 }
 
-st.set_page_config(page_title="Ballast", layout="wide", page_icon="⚓")
+_PAGE_ICON = str(LOGO_PNG) if LOGO_PNG.exists() else "◈"
+st.set_page_config(
+    page_title="Ballast · K8s incident response",
+    layout="wide",
+    page_icon=_PAGE_ICON,
+)
 inject_styles()
 
 
@@ -163,48 +179,41 @@ def render_screenshot_image(
 
 
 CHAT_STARTERS = [
-    "Why forward-fix instead of a full rollback?",
-    "Walk me through the rollout ↔ alert correlation.",
-    "Which evidence is strongest and why?",
-    "What happens to downstream services if we roll back?",
+    "Why forward-fix ingest instead of rolling back the pipeline?",
+    "How does the rollout ↔ alert correlation prove the chart bump?",
+    "Which evidence is strongest for the OOMKill?",
+    "What breaks for playback if we roll back ingest?",
 ]
 
 
 def render_rca_discuss(investigation_id: str, record: dict) -> None:
-    st.divider()
-    pane_title("Discuss findings")
-
     status = api_get(f"/investigations/{investigation_id}/chat/status", quiet=True) or {}
     if not status.get("available"):
-        st.info(
-            "RCA chat uses the **Cursor Cloud Agents API**. Add `CURSOR_API_KEY` to "
-            "`.env` and restart the Ballast API."
-        )
+        st.caption("Follow-up chat needs a Cursor API key on the Ballast API.")
         return
 
     messages = record.get("chat_messages") or []
-    chat_box = st.container(height=360, border=True)
+    chat_box = st.container(height=320, border=True)
     with chat_box:
         if not messages:
             st.caption(
-                "Ask follow-up questions about the RCA — blast radius, evidence, "
-                "remediation trade-offs, or what to check next."
+                "Ask about blast radius, evidence strength, or remediation trade-offs."
             )
         for msg in messages:
             with st.chat_message(msg.get("role", "assistant")):
                 st.markdown(msg.get("content", ""))
 
-    starter_cols = st.columns(len(CHAT_STARTERS))
-    for idx, question in enumerate(CHAT_STARTERS):
-        if starter_cols[idx].button(
-            question,
-            key=f"rca_starter_{investigation_id}_{idx}",
-            use_container_width=True,
-        ):
+    pick = st.selectbox(
+        "Suggested questions",
+        ["—"] + CHAT_STARTERS,
+        key=f"rca_starter_pick_{investigation_id}",
+    )
+    if pick and pick != "—":
+        if st.button("Ask", key=f"rca_starter_go_{investigation_id}"):
             with st.spinner("Thinking…"):
                 api_post(
                     f"/investigations/{investigation_id}/chat",
-                    {"message": question},
+                    {"message": pick},
                     timeout=200,
                 )
             st.rerun()
@@ -223,13 +232,7 @@ def render_rca_discuss(investigation_id: str, record: dict) -> None:
 
     agent_id = status.get("cursor_agent_id")
     if agent_id:
-        st.caption(
-            f"Continuing via Cursor Cloud Agent `{agent_id}` · "
-            f"[open agent](https://cursor.com/agents/{agent_id})"
-        )
-    model = status.get("model")
-    if model:
-        st.caption(f"Grounded in RCA + live cluster context · Cursor · {model}")
+        st.caption(f"[Open remediation agent](https://cursor.com/agents/{agent_id})")
 
 
 def api_post(path: str, body: dict | None = None, *, timeout: int = 10):
@@ -269,49 +272,75 @@ def render_service_stat_cards(
     investigator: str | None = None,
     firing_count: int | None = None,
 ) -> None:
+    """Hero pod/alert signal + dense secondary facts (not five equal metrics)."""
     rollout = rollout or {}
     crash = (kube or {}).get("crash_state") or rollout.get("crash_state") or {}
     argo = argo or {}
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    with m1:
-        st.metric("Service", service)
-    with m2:
-        mem = (kube or {}).get("memory_limit") or rollout.get("current_memory_limit") or "—"
-        st.metric("Memory limit", mem, f"healthy {rollout.get('healthy_memory_limit', '—')}")
-    with m3:
-        reason = crash.get("display_state") or crash.get("waiting_reason") or "—"
-        ready_note = f"{crash.get('ready_pods', 0)}/{crash.get('pods', 0)} ready"
-        st.metric("Pod state", reason, f"{crash.get('restarts', 0)} restarts · {ready_note}")
-    with m4:
-        st.metric(
-            "ArgoCD sync",
-            argo.get("sync_status") or "—",
-            argo.get("health_status") or argo.get("last_sync_phase") or "—",
+    reason = crash.get("display_state") or crash.get("waiting_reason") or "—"
+    restarts = crash.get("restarts", 0)
+    ready = f"{crash.get('ready_pods', 0)}/{crash.get('pods', 0)}"
+    reason_l = str(reason).lower()
+    bad = any(
+        tok in reason_l
+        for tok in ("crash", "oom", "error", "back-off", "backoff", "pending")
+    ) or (crash.get("ready_pods", 1) == 0 and crash.get("pods", 0) > 0)
+    if firing_count is not None and firing_count > 0:
+        bad = True
+    hero_mod = "ballast-hero--bad" if bad else "ballast-hero--ok"
+
+    mem = (kube or {}).get("memory_limit") or rollout.get("current_memory_limit") or "—"
+    healthy_mem = rollout.get("healthy_memory_limit") or "—"
+    sync = argo.get("sync_status") or "—"
+    health = argo.get("health_status") or argo.get("last_sync_phase") or "—"
+
+    st.markdown(
+        f'<div class="ballast-hero {hero_mod}">'
+        f'<div><div class="ballast-hero-label">{mdi("memory")} Pod state</div>'
+        f'<span class="ballast-hero-value">{html_lib.escape(str(reason))}</span>'
+        f'<span class="ballast-hero-meta"> · {restarts} restarts · {ready} ready</span></div>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    facts = [
+        f"<span>Service</span> <strong>{html_lib.escape(service)}</strong>",
+        f"<span>Memory</span> <strong>{html_lib.escape(str(mem))}</strong>"
+        f" <span>(healthy {html_lib.escape(str(healthy_mem))})</span>",
+        f"<span>ArgoCD</span> <strong>{html_lib.escape(str(sync))}</strong>"
+        f" / <strong>{html_lib.escape(str(health))}</strong>",
+    ]
+    if firing_count is not None:
+        facts.append(
+            f"<span>Firing alerts</span> <strong>{firing_count}</strong>"
+            f" <span>(stream alerts)</span>"
         )
-    with m5:
-        if firing_count is not None:
-            st.metric("Firing alerts", firing_count, "Ballast-related")
-        else:
-            st.metric("Investigator", investigator or "pending")
+    elif investigator:
+        facts.append(
+            f"<span>Investigator</span> <strong>{html_lib.escape(investigator)}</strong>"
+        )
+    st.markdown(
+        f'<div class="ballast-facts">{" · ".join(facts)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_cluster_overview(overview: dict) -> None:
-    primary = overview.get("primary_service", "payments")
+    primary = overview.get("primary_service", "ingest")
     argo = overview.get("argocd") or {}
     pf = overview.get("preflight") or {}
     healthy = overview.get("healthy", False)
     ballast_firing = overview.get("ballast_alert_firing", False)
 
     if healthy:
-        st.success("Everything looks good — cluster, deployments, and ArgoCD are healthy. No firing alerts.")
+        st.success("Cluster looks good — deployments and ArgoCD are healthy. No firing demo alerts.")
     elif ballast_firing:
         st.warning(
-            f"**{pf.get('alertname', 'BallastServiceCrashLooping')}** is firing for **{primary}**. "
-            "Click **Investigate problems** for RCA, evidence, and an auto-fix PR."
+            f"**{pf.get('alertname', 'StreamIngestCrashLooping')}** is firing for **{primary}**. "
+            "Click **Investigate** for RCA, evidence, and an auto-fix PR."
         )
     else:
-        st.info("Some services need attention. Review the grid below or click **Investigate problems**.")
+        st.info("Some services need attention. Review the board or click **Investigate**.")
 
     kube_primary = next(
         (s for s in overview.get("services", []) if s.get("service") == primary),
@@ -325,7 +354,11 @@ def render_cluster_overview(overview: dict) -> None:
     )
 
     st.markdown(
-        f'<p class="ballast-section-head">Services · namespace `{overview.get("namespace", "ballast")}`</p>',
+        f'<p class="ballast-section-head">{mdi("hub")} Services · namespace '
+        f'`{overview.get("demo_namespace") or overview.get("namespace", "demo")}`'
+        f' <span style="font-weight:500;color:#6b7280;font-size:0.85rem">'
+        f'(Ballast product ns: '
+        f'`{overview.get("product_namespace", "ballast")}`)</span></p>',
         unsafe_allow_html=True,
     )
     for row in overview.get("services", []):
@@ -349,7 +382,7 @@ def render_cluster_overview(overview: dict) -> None:
 
     firing = overview.get("firing_alerts") or []
     if firing:
-        with st.expander(f"Ballast-related firing alerts ({len(firing)})", expanded=ballast_firing):
+        with st.expander(f"Demo / workload firing alerts ({len(firing)})", expanded=ballast_firing):
             for a in firing:
                 st.markdown(
                     f"- **{a.get('alertname', '?')}** · service `{a.get('service', '—')}` "
@@ -359,13 +392,13 @@ def render_cluster_overview(overview: dict) -> None:
     infra = overview.get("infra_alerts") or []
     if infra:
         with st.expander(
-            f"Other cluster alerts ({len(infra)}) — kind control-plane noise, not part of the demo",
+            f"Other cluster alerts ({len(infra)}) — kind control-plane noise, not the demo",
             expanded=False,
         ):
             st.caption(
                 "These come from kube-prometheus-stack's default rules (kind doesn't expose "
                 "control-plane metrics; `Watchdog` is an always-firing heartbeat by design). "
-                "Not related to the Ballast incident."
+                "Not related to the stream-ingest incident."
             )
             for a in infra:
                 st.markdown(
@@ -375,10 +408,10 @@ def render_cluster_overview(overview: dict) -> None:
 
     tab_gitops, tab_deploy = st.tabs(["GitOps", "Deployments"])
     with tab_gitops:
-        pane_title("ArgoCD application state")
-        render_argocd_panel(argo, primary)
+        pane_title("ArgoCD application state", icon="cloud_sync")
+        render_argocd_panel(argo, primary, show_history=False)
     with tab_deploy:
-        pane_title("Recent ArgoCD deployments")
+        pane_title("Recent ArgoCD deployments", icon="history")
         history = (argo or {}).get("history") or []
         if not history:
             st.caption("No deployment history yet.")
@@ -530,16 +563,15 @@ def render_timeline(rows: list[dict]) -> None:
         else:
             detail_body = html_lib.escape(detail)
         detail_html = (
-            f'<div style="color:#64748b;font-size:0.78rem;margin-top:0.15rem">'
-            f"{detail_body}</div>"
-            if detail
-            else ""
+            f'<div class="ballast-tl-detail">{detail_body}</div>' if detail else ""
         )
         parts.append(
             f'<div class="ballast-tl-row">{dot}'
-            f'<span class="ballast-tl-ts">{fmt_dt(row.get("timestamp"))}</span>'
-            f'<div><strong>{html_lib.escape(row.get("label", ""))}</strong></div>'
+            f'<div class="ballast-tl-main">'
+            f"<strong>{html_lib.escape(row.get('label', ''))}</strong>"
             f"{detail_html}</div>"
+            f'<span class="ballast-tl-ts">{fmt_dt(row.get("timestamp"))}</span>'
+            f"</div>"
         )
     parts.append("</div>")
     html_panel("".join(parts))
@@ -562,7 +594,7 @@ def render_activity_log(events: list[dict]) -> None:
             status = e.get("status") or ""
             parts.append(
                 f'<div class="ballast-tool-row">{badge_inline(et, color)}'
-                f'<span style="font-family:monospace;font-size:0.72rem;color:#94a3b8">{ts}</span>'
+                f'<span style="font-family:monospace;font-size:0.72rem;color:#475569">{ts}</span>'
                 f"<span><strong>{name}</strong> — {status}</span></div>"
             )
             continue
@@ -572,9 +604,9 @@ def render_activity_log(events: list[dict]) -> None:
             if not text:
                 continue
             parts.append(
-                f'<div class="ballast-activity-card" style="border-left:3px solid {INDIGO}">'
+                f'<div class="ballast-activity-card ballast-activity-card--thinking">'
                 f'<div class="ballast-activity-ts">{ts} · thinking</div>'
-                f'<div class="ballast-activity-body" style="color:#64748b;font-style:italic">'
+                f'<div class="ballast-activity-body ballast-activity-body--muted">'
                 f"{html_lib.escape(text)}</div>"
                 f"</div>"
             )
@@ -585,7 +617,7 @@ def render_activity_log(events: list[dict]) -> None:
             if not text:
                 continue
             parts.append(
-                f'<div class="ballast-activity-card" style="border-left:3px solid {TEAL}">'
+                f'<div class="ballast-activity-card ballast-activity-card--assistant">'
                 f'<div class="ballast-activity-ts">{ts} · agent response</div>'
                 f'<div class="ballast-activity-body">{html_lib.escape(text)}</div></div>'
             )
@@ -602,27 +634,37 @@ def render_activity_log(events: list[dict]) -> None:
 
     if any(e.get("type") == "rca" for e in events):
         parts.append(
-            f'<div class="ballast-activity-card" style="border-left:3px solid {GREEN}">'
+            f'<div class="ballast-activity-card ballast-activity-card--rca">'
             f"{badge_inline('rca', GREEN)} &nbsp; RCA returned and validated against contract</div>"
         )
 
     html_panel("".join(parts))
 
 
-def render_argocd_panel(argo: dict | None, service: str) -> None:
+def render_argocd_panel(argo: dict | None, service: str, *, show_history: bool = True) -> None:
     if not argo:
         st.caption(f"No ArgoCD data for `{service}` — is the cluster up?")
         return
 
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Sync", argo.get("sync_status") or "—", f"rev {short_rev(argo.get('revision'))}")
-    with c2:
-        st.metric("Health", argo.get("health_status") or "—", fmt_dt(argo.get("health_transition")))
-    with c3:
-        st.metric("Last operation", argo.get("last_sync_phase") or "—", fmt_dt(argo.get("last_sync_finished")))
-    with c4:
-        st.metric("Target ref", argo.get("target_revision") or "—", argo.get("application", service))
+    sync = argo.get("sync_status") or "—"
+    health = argo.get("health_status") or "—"
+    phase = argo.get("last_sync_phase") or "—"
+    rev = short_rev(argo.get("revision"))
+    target = argo.get("target_revision") or "—"
+    app = argo.get("application") or service
+    facts = [
+        f"<span>Sync</span> <strong>{html_lib.escape(str(sync))}</strong>"
+        f" <span>(rev {html_lib.escape(str(rev))})</span>",
+        f"<span>Health</span> <strong>{html_lib.escape(str(health))}</strong>",
+        f"<span>Last op</span> <strong>{html_lib.escape(str(phase))}</strong>"
+        f" <span>{html_lib.escape(fmt_dt(argo.get('last_sync_finished')))}</span>",
+        f"<span>Target</span> <strong>{html_lib.escape(str(target))}</strong>"
+        f" <span>{html_lib.escape(str(app))}</span>",
+    ]
+    st.markdown(
+        f'<div class="ballast-facts">{" · ".join(facts)}</div>',
+        unsafe_allow_html=True,
+    )
 
     msg = argo.get("last_sync_message")
     if msg:
@@ -650,7 +692,7 @@ def render_argocd_panel(argo: dict | None, service: str) -> None:
                 )
 
     history = argo.get("history") or []
-    if history:
+    if show_history and history:
         with st.expander("Deployment history", expanded=False):
             for h in history:
                 id_suffix = f" (id {h['id']})" if h.get("id") is not None else ""
@@ -679,18 +721,24 @@ def render_autofix_status(record: dict, action: str) -> None:
     if not status and record.get("status") == "complete":
         if auto_enabled:
             st.caption(
-                "Plan: file a GitHub issue from this RCA → launch a Cursor remediation agent "
-                "→ open a forward-fix pull request. Links appear here as each step completes."
+                "Issue → Cursor agent → forward-fix PR. Links appear as each step completes."
             )
         else:
             st.caption(
-                "Set `BALLAST_AUTO_REMEDIATE=1` (and `CURSOR_API_KEY`) to auto-file an issue "
-                "and open a fix PR, or trigger manually below."
+                "Auto-remediation is off. Use the button below to file an issue and open a fix PR."
             )
 
     if status == "failed" and not pr_url:
         st.error(err or "Remediation failed")
-        if st.button("Retry issue + fix agent", key=f"remediate_{record['id']}"):
+        confirm = st.checkbox(
+            "Retry will file another issue and launch a new agent",
+            key=f"remediate_retry_confirm_{record['id']}",
+        )
+        if st.button(
+            "Retry issue + fix agent",
+            key=f"remediate_{record['id']}",
+            disabled=not confirm,
+        ):
             api_post(f"/investigations/{record['id']}/remediate", timeout=30)
             st.rerun()
         if issue_url:
@@ -732,7 +780,15 @@ def render_autofix_status(record: dict, action: str) -> None:
             st.caption("Fix PR — pending")
 
     if not issue_url and not status and record.get("status") == "complete":
-        if st.button("File issue + launch fix agent", key=f"remediate_start_{record['id']}"):
+        confirm = st.checkbox(
+            "I understand this will file a GitHub issue and launch a fix agent",
+            key=f"remediate_confirm_{record['id']}",
+        )
+        if st.button(
+            "File issue + launch fix agent",
+            key=f"remediate_start_{record['id']}",
+            disabled=not confirm,
+        ):
             api_post(f"/investigations/{record['id']}/remediate", timeout=30)
             st.rerun()
     elif err and status == "complete":
@@ -741,7 +797,9 @@ def render_autofix_status(record: dict, action: str) -> None:
 
 def render_rca_panel(record: dict, rca: dict) -> None:
     score = rca["confidence"]["score"]
-    top = st.columns([1, 1, 1])
+    act = rca["recommended_action"]["action"]
+
+    top = st.columns([1.2, 1, 1])
     with top[0]:
         st.markdown(
             f"Confidence &nbsp; "
@@ -750,9 +808,7 @@ def render_rca_panel(record: dict, rca: dict) -> None:
         )
         st.progress(score)
     with top[1]:
-        act = rca["recommended_action"]["action"]
         st.badge(act.replace("_", " "), color=streamlit_badge_color(act))
-
     with top[2]:
         st.badge(rca["generated_by"], color="blue")
         st.caption(fmt_dt(record.get("created_at")))
@@ -760,31 +816,32 @@ def render_rca_panel(record: dict, rca: dict) -> None:
     st.markdown(f"### {rca['summary']}")
     st.caption(rca["confidence"]["rationale"])
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        with st.expander("Rollout correlation", expanded=True):
-            corr = rca["rollout_correlation"]
-            st.write(
-                f"Rollout **{fmt_dt(corr['rollout_at'])}** → alert "
-                f"**{fmt_dt(corr['alert_fired_at'])}** "
-                f"({corr['delta_seconds']:.0f}s later, "
-                f"{'correlated' if corr['correlated'] else 'not correlated'})"
-            )
-        with st.expander("Resource change", expanded=True):
-            rc = rca["resource_change"]
-            st.code(f"{rc['field']}: {rc['previous']} → {rc['current']}")
-            st.caption(rc["note"])
-    with col_b:
-        with st.expander("Recommended action", expanded=True):
-            st.write(rca["recommended_action"]["reasoning"])
-            st.code(rca["recommended_action"]["remediation"], language="bash")
-            render_autofix_status(record, act)
-        with st.expander("Blast radius", expanded=True):
-            chips = " ".join(badge_inline(s, SLATE) for s in rca["blast_radius"]["if_rolled_back"])
-            st.markdown(chips or "_none_", unsafe_allow_html=True)
-            st.caption(
-                f"{rca['blast_radius']['graph_source']} — {rca['blast_radius']['note']}"
-            )
+    # Decision first — recommended action is the primary job of this view
+    st.markdown("**Recommended action**")
+    st.write(rca["recommended_action"]["reasoning"])
+    st.code(rca["recommended_action"]["remediation"], language="bash")
+    render_autofix_status(record, act)
+
+    corr = rca["rollout_correlation"]
+    rc = rca["resource_change"]
+    with st.expander("Why this happened", expanded=False):
+        st.markdown(
+            f"Rollout **{fmt_dt(corr['rollout_at'])}** → alert "
+            f"**{fmt_dt(corr['alert_fired_at'])}** "
+            f"({corr['delta_seconds']:.0f}s later, "
+            f"{'correlated' if corr['correlated'] else 'not correlated'})"
+        )
+        st.code(f"{rc['field']}: {rc['previous']} → {rc['current']}")
+        st.caption(rc["note"])
+
+    with st.expander("Blast radius", expanded=False):
+        chips = " ".join(
+            badge_inline(s, SLATE) for s in rca["blast_radius"]["if_rolled_back"]
+        )
+        st.markdown(chips or "_none_", unsafe_allow_html=True)
+        st.caption(
+            f"{rca['blast_radius']['graph_source']} — {rca['blast_radius']['note']}"
+        )
 
     with st.expander("Supporting telemetry", expanded=False):
         for s in rca["supporting_telemetry"]:
@@ -793,7 +850,7 @@ def render_rca_panel(record: dict, rca: dict) -> None:
             st.markdown(f"- **{s['signal']}**: {s['observation']}{link}{q}")
 
     artifacts = investigation_artifacts(record)
-    with st.expander("Evidence", expanded=True):
+    with st.expander("Evidence screenshots", expanded=False):
         shot_cols = st.columns(3)
         with shot_cols[0]:
             st.caption("Prometheus")
@@ -804,7 +861,7 @@ def render_rca_panel(record: dict, rca: dict) -> None:
                     caption="Prometheus firing alerts",
                 )
             else:
-                st.caption("_No capture yet — re-run investigation after `task setup:playwright`._")
+                st.caption("_No capture yet — re-run after screenshots are enabled._")
         with shot_cols[1]:
             st.caption("ArgoCD")
             if artifacts["argocd"]:
@@ -814,10 +871,7 @@ def render_rca_panel(record: dict, rca: dict) -> None:
                     caption="ArgoCD application",
                 )
             else:
-                st.caption(
-                    "_No capture yet — re-run after ArgoCD port-forward "
-                    "(`:8080`); live login failures fall back to snapshot._"
-                )
+                st.caption("_No capture yet — needs ArgoCD on `:8080`._")
         with shot_cols[2]:
             st.caption("Grafana")
             if artifacts["grafana"]:
@@ -827,10 +881,7 @@ def render_rca_panel(record: dict, rca: dict) -> None:
                     caption="Grafana dashboard",
                 )
             else:
-                st.caption(
-                    "_No capture yet — re-run investigation with Grafana on "
-                    "`:3000` (and Playwright: `task setup:playwright`)._"
-                )
+                st.caption("_No capture yet — needs Grafana on `:3000`._")
 
         st.divider()
         for ev in rca["evidence"]:
@@ -840,23 +891,23 @@ def render_rca_panel(record: dict, rca: dict) -> None:
                 unsafe_allow_html=True,
             )
 
-    render_rca_discuss(record["id"], record)
+    with st.expander("Discuss this incident", expanded=False):
+        render_rca_discuss(record["id"], record)
 
 
 # ── Sidebar: investigations ───────────────────────────────────────────────
 
 CLUSTER_VIEW = "__cluster__"
 overview = api_get("/cluster/overview") or {}
-primary_service = overview.get("primary_service", "payments")
+primary_service = overview.get("primary_service", "ingest")
 
 with st.sidebar:
-    st.markdown("## ⚓ Ballast")
-    st.caption("GitOps incident response")
+    st.markdown(brand_block(), unsafe_allow_html=True)
 
-    if st.button("Investigate problems", use_container_width=True, type="primary"):
+    if st.button("Investigate", use_container_width=True, type="primary"):
         res = api_post(
             "/investigations",
-            {"alertname": "BallastServiceCrashLooping", "service": primary_service},
+            {"alertname": "StreamIngestCrashLooping", "service": primary_service},
         )
         if res and res.get("_conflict"):
             detail = res["_conflict"]
@@ -874,7 +925,11 @@ with st.sidebar:
             st.session_state.pop("all_good", None)
             st.session_state["selected"] = res["id"]
 
-    auto = st.checkbox("Live refresh", value=True)
+    auto = st.checkbox(
+        "Auto-refresh while investigating",
+        value=True,
+        help="Polls only while an investigation or autofix is in progress — not on cluster overview.",
+    )
     st.divider()
 
     investigations = api_get("/investigations") or []
@@ -891,12 +946,12 @@ with st.sidebar:
 
     def _label(iid: str) -> str:
         if iid == CLUSTER_VIEW:
-            return "◎ Cluster overview"
+            return "Cluster overview"
         rec = options[iid]
         disp = "●" if rec["status"] in RUNNING else "○"
         return f"{disp} {rec['service']} · {rec['status']}"
 
-    st.radio("Views", ids, format_func=_label, key="selected")
+    st.radio("Investigations", ids, format_func=_label, key="selected")
     if total_investigations > SIDEBAR_INVESTIGATION_LIMIT:
         st.caption(
             f"Showing latest {SIDEBAR_INVESTIGATION_LIMIT} of {total_investigations} investigations."
@@ -905,11 +960,23 @@ with st.sidebar:
     sel = st.session_state["selected"]
     if sel != CLUSTER_VIEW and sel in options:
         rec = options[sel]
-        st.caption(rec.get("alertname", ""))
-        st.caption(fmt_dt(rec.get("created_at")))
-        st.caption(f"`{rec['id']}`")
+        alert = html_lib.escape(rec.get("alertname") or "Investigation")
+        when = html_lib.escape(fmt_dt(rec.get("created_at")))
+        iid = html_lib.escape(rec["id"])
+        st.markdown(
+            f'<div class="ballast-side-meta">'
+            f'<p class="ballast-side-meta-alert">{mdi("notification_important")} {alert}</p>'
+            f'<div class="ballast-side-meta-row">'
+            f"<span>{when}</span>"
+            f'<span class="ballast-side-meta-id">{iid}</span>'
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
     elif not investigations:
-        st.caption("No investigations yet — use **Investigate problems** when an alert fires.")
+        st.caption(
+            "No investigations yet. When a CrashLoop alert fires, click **Investigate** "
+            "to run RCA and open a fix PR."
+        )
 
     if st.session_state.get("api_error"):
         st.warning(st.session_state["api_error"])
@@ -922,22 +989,31 @@ kube_live = api_get(f"/kubernetes/services/{record['service']}", quiet=True) if 
 
 # ── Main workspace ──────────────────────────────────────────────────────────
 
+STAGE_ICONS = {"Overview": "dns", "Investigation": "troubleshoot"}
+
 if cluster_mode:
-    st.markdown('<p class="ballast-section-head">Cluster overview</p>', unsafe_allow_html=True)
-    st.caption("Live health across deployments, ArgoCD, and Prometheus alerts.")
+    masthead(
+        "Cluster overview",
+        "Live health across services, ArgoCD, and firing alerts.",
+        icon="dns",
+    )
+    stage_pills("Overview", ["Overview", "Investigation"], icons=STAGE_ICONS)
+    if st.button("Refresh overview", type="secondary"):
+        st.rerun()
     if st.session_state.pop("all_good", False):
-        st.success("Everything looks good! No firing alerts and workloads are healthy.")
+        st.success("Cluster looks good — no firing demo alerts and workloads are healthy.")
     render_cluster_overview(overview)
 elif not record:
-    st.info("Select **Cluster overview** in the sidebar or trigger **Investigate problems**.")
+    st.info("Select **Cluster overview** in the sidebar or click **Investigate**.")
 else:
     head_l, head_r = st.columns([5, 1])
     with head_l:
-        st.markdown(
-            f'<p class="ballast-section-head">{record["alertname"]} · {record["service"]}</p>',
-            unsafe_allow_html=True,
+        masthead(
+            f"{record['alertname']} · {record['service']}",
+            f"Opened {fmt_dt(record.get('created_at'))}",
+            icon="troubleshoot",
         )
-        st.caption(f"Opened {fmt_dt(record.get('created_at'))}")
+        stage_pills("Investigation", ["Overview", "Investigation"], icons=STAGE_ICONS)
     with head_r:
         st.badge(record["status"], color=streamlit_badge_color(record["status"]))
 
@@ -956,6 +1032,29 @@ else:
     if brief.get("degraded"):
         st.warning("Triage degraded: " + "; ".join(brief["degraded"]))
 
+    # Persistent correlation strip — bridges Timeline ↔ Root cause
+    if rca and rca.get("rollout_correlation"):
+        corr = rca["rollout_correlation"]
+        rc = rca.get("resource_change") or {}
+        delta = corr.get("delta_seconds")
+        delta_s = f"{delta:.0f}s later" if isinstance(delta, (int, float)) else "—"
+        change = ""
+        if rc.get("field"):
+            change = (
+                f" · <strong>{html_lib.escape(str(rc['field']))}</strong> "
+                f"{html_lib.escape(str(rc.get('previous', '—')))} → "
+                f"{html_lib.escape(str(rc.get('current', '—')))}"
+            )
+        st.markdown(
+            f'<div class="ballast-corr">'
+            f"Rollout <strong>{fmt_dt(corr.get('rollout_at'))}</strong> → "
+            f"alert <strong>{fmt_dt(corr.get('alert_fired_at'))}</strong> "
+            f"({delta_s}"
+            f"{', correlated' if corr.get('correlated') else ''})"
+            f"{change}</div>",
+            unsafe_allow_html=True,
+        )
+
     cursor_url = next(
         (
             e.get("text")
@@ -970,42 +1069,43 @@ else:
     if record["status"] == "failed" and record.get("error"):
         st.error(record["error"])
 
-    tab_timeline, tab_gitops, tab_investigation, tab_rca = st.tabs(
-        [
-            "Timeline",
-            "GitOps",
-            "Investigation",
-            f"Root cause{' ✓' if rca else ''}",
-        ]
-    )
+    # Root cause first when RCA exists — one job per view
+    if rca:
+        tab_rca, tab_timeline, tab_gitops, tab_investigation = st.tabs(
+            ["Verdict", "Signal trail", "GitOps", "Agent feed"]
+        )
+    else:
+        tab_timeline, tab_gitops, tab_investigation, tab_rca = st.tabs(
+            [
+                "Signal trail",
+                "GitOps",
+                "Agent feed",
+                "Verdict",
+            ]
+        )
 
     timeline_rows = build_incident_timeline(record, argocd_live, rca)
 
     with tab_timeline:
-        pane_title("Chronological incident timeline")
+        pane_title("Signal trail", icon="timeline")
         with st.container(border=True):
             render_timeline(timeline_rows)
-        st.caption(f"{len(timeline_rows)} events across alert, rollout, ArgoCD, and investigation.")
+        st.caption(f"{len(timeline_rows)} events")
 
     with tab_gitops:
-        pane_title("ArgoCD application state")
+        pane_title("ArgoCD application", icon="cloud_sync")
         render_argocd_panel(argocd_live or brief.get("argocd"), record["service"])
 
     with tab_investigation:
-        pane_title("Agent & engine activity")
+        pane_title("Agent & engine feed", icon="terminal")
         with st.container(height=480, border=True):
             render_activity_log(record.get("events") or [])
 
     with tab_rca:
         if not rca:
-            st.info("Root cause analysis will appear here when the investigation completes.")
+            st.info("Verdict will appear here when triage completes.")
             if record["status"] in RUNNING:
-                st.caption("Investigation in progress — timeline, evidence, and auto-fix PR will follow.")
-                if os.environ.get("BALLAST_AUTO_REMEDIATE", "0") == "1":
-                    st.caption(
-                        "When RCA recommends forward-fix: GitHub issue → Cursor agent → fix PR "
-                        "(links appear under Recommended action)."
-                    )
+                st.caption("In progress — evidence and remediation follow when RCA is ready.")
         else:
             render_rca_panel(record, rca)
 
@@ -1029,12 +1129,11 @@ elif (
     # Cap polling so a missing PR doesn't spin forever.
     wait_key = f"pr_reconcile_waits_{record['id']}"
     waits = int(st.session_state.get(wait_key, 0))
-    if waits < 40:  # ~60s at 1.5s interval
+    if waits < 20:  # ~60s at 3s interval
         st.session_state[wait_key] = waits + 1
         needs_refresh = True
-elif cluster_mode and auto:
-    needs_refresh = True
+# Cluster overview stays static — full-page rerun there caused constant UI flash.
 
 if needs_refresh:
-    time.sleep(1.5)
+    time.sleep(3.0)
     st.rerun()
