@@ -42,9 +42,19 @@ def _spawn(investigation_id: str, alert: AlertContext, service: str) -> None:
 
 def _start(alertname: str, service: str, alert: AlertContext) -> str | None:
     fired_at = alert.fired_at
-    if STORE.has_for_alert_episode(alertname, service, fired_at):
-        existing = STORE.find_for_alert_episode(alertname, service, fired_at)
-        return existing.id if existing else None
+    # Idempotency for an active incident: never spawn a second investigation
+    # when one is already running, already covers this alert episode, or was
+    # just created for the same alert+service. The console triggers with a
+    # fresh `_now()` episode whenever no alert is firing yet, so episode-exact
+    # matching alone would let each completed run be followed by a brand-new
+    # one on the next tick — the `find_recent_for_alert` fallback closes that.
+    existing = (
+        STORE.find_active_for_alert(alertname, service)
+        or STORE.find_for_alert_episode(alertname, service, fired_at)
+        or STORE.find_recent_for_alert(alertname, service)
+    )
+    if existing is not None:
+        return existing.id
     investigation_id = STORE.allocate_incident_id()
     STORE.create(
         InvestigationRecord(

@@ -329,6 +329,21 @@ def assess_investigation_readiness(
                 "This alert episode was already investigated — see the existing run in the sidebar"
             )
 
+    # Console triggers without a firing alert carry a fresh `_now()` episode, so
+    # episode-exact dedup above misses a run that already exists for this same
+    # incident. Fall back to any recent run for this alert+service so preflight
+    # reports it as already-investigated (ready=False, existing id surfaced) and
+    # the console points the operator at it instead of spawning a duplicate —
+    # matching the idempotency `_start` now enforces on the write path.
+    if not investigation_active and not already_investigated:
+        recent = STORE.find_recent_for_alert(alertname, service)
+        if recent is not None:
+            already_investigated = True
+            existing_id = recent.id
+            blockers.append(
+                "A recent investigation already exists for this incident — see the sidebar"
+            )
+
     false_positive = alert_firing and kube_ok and cluster_healthy
     ready = (
         incident_detected

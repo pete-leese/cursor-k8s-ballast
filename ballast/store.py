@@ -347,14 +347,44 @@ class InvestigationStore:
         self, service: str, *, within_seconds: int = 3600
     ) -> InvestigationRecord | None:
         """Newest investigation for ``service`` created within ``within_seconds``."""
-        from datetime import datetime, timezone
-
         cutoff = datetime.now(timezone.utc).timestamp() - within_seconds
         with self._lock:
             for record in sorted(
                 self._records.values(), key=lambda r: r.created_at, reverse=True
             ):
                 if record.service != service:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(
+                        record.created_at.replace("Z", "+00:00")
+                    ).timestamp()
+                except ValueError:
+                    continue
+                if ts >= cutoff:
+                    return record
+            return None
+
+    def find_recent_for_alert(
+        self, alertname: str, service: str, *, within_seconds: int = 1800
+    ) -> InvestigationRecord | None:
+        """Newest non-failed investigation for this alert+service in the window.
+
+        Backs POST idempotency for an active incident. Episode-exact dedup keys
+        on the firing-alert timestamp, but the console triggers with a fresh
+        ``_now()`` whenever no alert is firing yet (CrashLoop-only / pending
+        ``for:`` window), so a completed run would otherwise be followed by a
+        brand-new one on the next trigger. Matching any recent run for the same
+        alert+service collapses those repeat submits onto the first record.
+        Failed runs are skipped so a genuine retry can still start.
+        """
+        cutoff = datetime.now(timezone.utc).timestamp() - within_seconds
+        with self._lock:
+            for record in sorted(
+                self._records.values(), key=lambda r: r.created_at, reverse=True
+            ):
+                if record.alertname != alertname or record.service != service:
+                    continue
+                if record.status == InvestigationStatus.failed:
                     continue
                 try:
                     ts = datetime.fromisoformat(

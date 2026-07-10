@@ -713,7 +713,7 @@ def render_cluster_overview(overview: dict) -> None:
             st.markdown(
                 f'<p class="ballast-signals-note">'
                 f'Already investigated as <code>{html_lib.escape(existing)}</code> — '
-                f"open it in the sidebar, or click <strong>Investigate</strong> to jump there.</p>",
+                f"open it in the sidebar, or click <strong>Open investigation</strong> to jump there.</p>",
                 unsafe_allow_html=True,
             )
         elif incident and pf.get("ready"):
@@ -752,14 +752,43 @@ def render_cluster_overview(overview: dict) -> None:
         # key directly; it stashes the target in `_pending_selected` and reruns
         # the whole app, where the sidebar applies it before rebuilding the
         # radio. Behavior/flow is otherwise identical to the old handler.
+        #
+        # This button re-renders every ~5s (it lives in the `run_every`
+        # fragment), so it must never spawn more than one investigation per
+        # incident. Two guards make that robust:
+        #   1. When preflight already knows of an active/recent run for this
+        #      incident, the button becomes an "Open investigation" navigator —
+        #      it can only jump to the existing run, never create.
+        #   2. Otherwise a one-shot in-flight latch disables the button the
+        #      moment it is clicked, so a slow POST can't be double-submitted
+        #      before the app reruns and navigates away. (The backend is also
+        #      idempotent, so even a stray submit reuses the existing record.)
+        existing_id = pf.get("existing_investigation_id")
+        has_existing = bool(
+            existing_id
+            and (pf.get("investigation_active") or pf.get("already_investigated"))
+        )
         btn_col, _ = st.columns([1, 2])
         with btn_col:
-            if st.button(
+            if has_existing:
+                if st.button(
+                    "Open investigation",
+                    key="open_existing_investigation",
+                    use_container_width=True,
+                    type="primary",
+                ):
+                    st.session_state.pop("all_good", None)
+                    st.session_state["_investigate_inflight"] = False
+                    st.session_state["_pending_selected"] = existing_id
+                    st.rerun(scope="app")
+            elif st.button(
                 "Investigate",
                 key="investigate_main",
                 use_container_width=True,
                 type="primary",
+                disabled=bool(st.session_state.get("_investigate_inflight")),
             ):
+                st.session_state["_investigate_inflight"] = True
                 res = api_post(
                     "/investigations",
                     {"alertname": "StreamIngestCrashLooping", "service": primary},
@@ -777,12 +806,17 @@ def render_cluster_overview(overview: dict) -> None:
                         st.rerun(scope="app")
                     else:
                         st.session_state.pop("all_good", None)
+                        st.session_state.pop("_investigate_inflight", None)
                         hint = detail.get("hint") or "; ".join(detail.get("blockers") or [])
                         st.warning(hint)
                 elif res and res.get("id"):
                     st.session_state.pop("all_good", None)
                     st.session_state["_pending_selected"] = res["id"]
                     st.rerun(scope="app")
+                else:
+                    # POST failed (api_post already surfaced the error) — release
+                    # the latch so the operator can retry.
+                    st.session_state.pop("_investigate_inflight", None)
 
     kube_primary = next(
         (s for s in overview.get("services", []) if s.get("service") == primary),
@@ -1588,6 +1622,11 @@ if cluster_mode:
     # flag here so it doesn't linger — do NOT emit a second banner, or it would
     # stack on top of the fragment's copy after an Investigate click.
     st.session_state.pop("all_good", None)
+    # Release the Investigate in-flight latch on every full overview render: a
+    # successful submit navigates to the new run (never back here), so reaching
+    # this render means no submit is outstanding — reset so a later, genuinely
+    # new incident can be investigated again.
+    st.session_state.pop("_investigate_inflight", None)
     # Seed the live fragment's baseline from this full render's fetch so its
     # first tick has data (even while paused) and doesn't immediately escalate
     # to a full-app rerun. The panel itself then live-updates in place.
