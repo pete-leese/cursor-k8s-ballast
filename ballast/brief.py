@@ -13,7 +13,8 @@ from pydantic import BaseModel
 
 class AlertContext(BaseModel):
     alertname: str
-    fired_at: str  # ISO-8601
+    fired_at: str  # ISO-8601 — Prometheus activeAt, or symptom anchor if not observed
+    observed: bool = True  # False when kube/Argo triggered investigation before alert
     expr: str | None = None
     severity: str | None = None
     labels: dict[str, str] = {}
@@ -84,20 +85,40 @@ class InvestigationBrief(BaseModel):
 
     def to_agent_prompt(self, rca_schema: str) -> str:
         """Render the brief into the prompt a Cursor Cloud Agent receives."""
+        alert_note = (
+            "Prometheus alert is observed and firing."
+            if self.alert.observed
+            else (
+                "Prometheus alert is NOT observed yet (still in for: window or "
+                "unreachable). Treat Kubernetes crash state and ArgoCD sync/health "
+                "as primary signals — do not wait for the alert."
+            )
+        )
         return (
             "You are a codebase/infrastructure investigator, not a code "
             f"generator. Investigate the following production incident in the "
             f"'{self.service}' Kubernetes service.\n\n"
             "INVESTIGATION BRIEF (JSON):\n"
             f"{self.model_dump_json(indent=2)}\n\n"
+            "Signal sources (correlate ALL that are present — do not rely on "
+            "Prometheus alone):\n"
+            f"- Prometheus: {alert_note}\n"
+            "- Kubernetes API: pod waiting reason, last terminated reason / "
+            "exit code, restarts, memory limit vs healthy.\n"
+            "- ArgoCD: sync status, health, last sync revision/time, resource "
+            "results, and recent Application events.\n"
+            "- Chart / git: the values field that regressed.\n\n"
             "Tasks:\n"
             "1. Identify the Helm chart / values change that explains the "
             "CrashLoopBackOff (which field regressed, old vs new value).\n"
-            "2. Confirm the rollout timestamp correlates with the alert firing "
-            "time using the read-only Prometheus/Grafana MCP tools if available "
-            "(query kube_pod_container_status_waiting_reason and "
-            "kube_pod_container_status_last_terminated_reason for the namespace).\n"
-            "3. Use blast_radius_hint to reason about whether a full rollback or "
+            "2. Build a timeline that correlates rollout time with Kubernetes "
+            "crash evidence, ArgoCD sync/health transition, and (if observed) "
+            "the Prometheus alert. Use read-only Prometheus/Grafana MCP tools "
+            "when available (kube_pod_container_status_waiting_reason, "
+            "kube_pod_container_status_last_terminated_reason).\n"
+            "3. Weigh agreement across signals in confidence.rationale "
+            "(e.g. OOM + bad memory limit + ArgoCD Degraded + alert).\n"
+            "4. Use blast_radius_hint to reason about whether a full rollback or "
             "a targeted forward-fix is safer, and give the exact remediation.\n\n"
             "Return ONLY a single JSON object that validates against this JSON "
             "Schema. No prose, no markdown fences, JSON only:\n\n"

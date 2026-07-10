@@ -311,11 +311,12 @@ def run_remediation(investigation_id: str, rca: RCA) -> None:
         rca_path.write_text(rca.model_dump_json(indent=2))
 
         if not issue_url:
-            title = (
-                f"INCIDENT: {rca.service} — {rca.summary[:120]}"
-                if rca.summary
-                else f"INCIDENT: {rca.service}"
-            )
+            ticket = rca.investigation_id or "INC-????"
+            summary_bit = (rca.summary or "").strip()
+            if summary_bit:
+                title = f"{ticket}: {rca.service} — {summary_bit[:100]}"
+            else:
+                title = f"{ticket}: {rca.service} incident"
             body_proc = _run_cmd(["./scripts/format-rca-issue.sh", str(rca_path)])
             if body_proc.returncode != 0:
                 raise RuntimeError(body_proc.stderr.strip() or "format-rca-issue failed")

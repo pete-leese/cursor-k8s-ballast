@@ -27,6 +27,10 @@ for app in deploy/argocd/apps/*.yaml; do
   apply_with_revision "$app"
 done
 
+# Demo cadence: poll git every 15s instead of the default 180s.
+kubectl -n argocd patch configmap argocd-cm --type merge \
+  -p '{"data":{"timeout.reconciliation":"15s"}}' >/dev/null 2>&1 || true
+
 echo "==> ArgoCD will now sync the child apps. Watch with:"
 echo "    kubectl -n argocd get applications"
 echo "    kubectl -n demo get pods -w"

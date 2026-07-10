@@ -103,6 +103,12 @@ if [ "${SKIP_ARGOCD:-0}" != "1" ]; then
     -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
   echo "    waiting for argocd-server..."
   kubectl -n argocd rollout status deploy/argocd-server --timeout=5m || true
+  echo "==> Speeding up ArgoCD reconciliation for demos (15s)"
+  kubectl -n argocd patch configmap argocd-cm --type merge \
+    -p '{"data":{"timeout.reconciliation":"15s"}}'
+  kubectl -n argocd rollout restart statefulset/argocd-application-controller 2>/dev/null \
+    || kubectl -n argocd rollout restart deploy/argocd-application-controller 2>/dev/null \
+    || true
   if [ "${SKIP_DEPLOY:-0}" != "1" ]; then
     echo "==> Bootstrapping ArgoCD app-of-apps and syncing the five services"
     ./scripts/deploy.sh

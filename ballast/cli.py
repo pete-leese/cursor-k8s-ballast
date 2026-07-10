@@ -28,8 +28,9 @@ DEFAULT_REPO = "https://github.com/pete-leese/cursor-k8s-ballast"
 
 
 def _investigation_id(service: str) -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return f"inv-{stamp}-{service}"
+    """CLI one-shot id — ticket-shaped, not persisted in the console store."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    return f"INC-CLI-{stamp}-{service}"
 
 
 def cmd_investigate(args: argparse.Namespace) -> int:

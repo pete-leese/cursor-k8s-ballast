@@ -152,6 +152,8 @@ class CursorInvestigator(Investigator):
         proc.stdin.close()
 
         saw_event = False
+        saw_error = False
+        last_error: str | None = None
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -164,15 +166,18 @@ class CursorInvestigator(Investigator):
                 try:
                     rca = RCA.model_validate(evt["data"])
                 except ValidationError as exc:
-                    yield InvestigationEvent(
-                        type="error", text=f"RCA failed contract validation: {exc}"
-                    )
+                    saw_error = True
+                    last_error = f"RCA failed contract validation: {exc}"
+                    yield InvestigationEvent(type="error", text=last_error)
                     continue
                 rca.generated_by = GeneratedBy.cursor
                 saw_event = True
                 yield InvestigationEvent(type="rca", rca=rca)
             else:
                 saw_event = True
+                if evt.get("type") == "error":
+                    saw_error = True
+                    last_error = evt.get("text") or "sdk-runner error"
                 yield InvestigationEvent(
                     type=evt.get("type", "status"),
                     name=evt.get("name"),
@@ -181,9 +186,26 @@ class CursorInvestigator(Investigator):
                 )
         proc.wait()
         stderr = proc.stderr.read().strip() if proc.stderr else ""
-        if proc.returncode != 0 or (not saw_event and stderr):
+        if proc.returncode != 0 and not saw_error:
             detail = stderr or f"sdk-runner exited with code {proc.returncode}"
             yield InvestigationEvent(type="error", text=detail)
+            saw_error = True
+            last_error = detail
+        elif proc.returncode != 0 and saw_error and stderr and last_error:
+            if stderr and stderr not in (last_error or ""):
+                yield InvestigationEvent(
+                    type="error", text=f"sdk-runner stderr: {stderr[:500]}"
+                )
+
+        # Demo resilience: if the cloud agent didn't return a valid RCA, fall
+        # back to the deterministic engine so the console still completes.
+        fallback = os.environ.get("BALLAST_CURSOR_FALLBACK", "1") == "1"
+        if fallback and saw_error:
+            yield InvestigationEvent(
+                type="status",
+                text="Cursor RCA unavailable — falling back to deterministic engine",
+            )
+            yield from EngineInvestigator().investigate(brief)
 
 
 def get_investigator() -> Investigator:

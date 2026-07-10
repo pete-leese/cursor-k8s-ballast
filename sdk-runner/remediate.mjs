@@ -52,11 +52,13 @@ const repoUrl = process.env.CURSOR_TARGET_REPO ?? "https://github.com/pete-leese
 const ref = process.env.CURSOR_TARGET_REF ?? "main";
 const model = process.env.CURSOR_MODEL ?? "composer-2.5";
 const service = rca.service ?? "ingest";
+const ticket = rca.investigation_id || "INC-????";
 const healthy = rca.resource_change?.previous ?? process.env.BALLAST_HEALTHY_MEMORY ?? "128Mi";
 const valuesPath = `deploy/services/${service}.values.yaml`;
 
 const prompt = `You are remediating a production Kubernetes/GitOps incident in this repo.
 
+Incident ticket: ${ticket}
 GitHub issue: ${issueUrl}
 
 ROOT CAUSE ANALYSIS (JSON):
@@ -64,8 +66,12 @@ ${JSON.stringify(rca, null, 2)}
 
 Tasks:
 1. Restore \`resources.limits.memory\` to **${healthy}** in \`${valuesPath}\`.
-2. Open a PR against \`${ref}\` titled: fix(${service}): restore memory limit to ${healthy} (Ballast RCA)
-3. PR body must link the GitHub issue and summarise the RCA.
+2. Open a PR against \`${ref}\` titled exactly:
+   ${ticket}: fix(${service}): restore memory limit to ${healthy}
+3. PR body must:
+   - Start with \`Fixes\` / \`Closes\` linking the GitHub issue
+   - Mention incident ticket **${ticket}** in the first line
+   - Summarise the RCA (why forward-fix, blast radius)
 4. Do not merge the PR.`;
 
 try {

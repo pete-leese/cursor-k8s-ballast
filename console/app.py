@@ -1,16 +1,16 @@
 """Ballast console — Kubernetes incident response for GitOps fleets.
 
 Sidebar: cluster overview + investigation list.
-Main: Verdict · Signal trail · GitOps · Agent feed.
+Main: Verdict · Incident Timeline · GitOps · Agent feed.
 
 Reads from the Ballast API (BALLAST_API_URL).
 """
 
 from __future__ import annotations
 
-import os
-import time
 import html as html_lib
+import math
+import os
 from datetime import datetime
 
 import requests
@@ -32,6 +32,8 @@ from theme import (
 API = os.environ.get("BALLAST_API_URL", "http://localhost:8000")
 RUNNING = {"queued", "triaging", "investigating"}
 SIDEBAR_INVESTIGATION_LIMIT = 12
+# Cap background reconcile ticks (issue filed, PR not yet visible) at ~60s.
+_RECONCILE_TICK_CAP = 20
 
 # Palette — ink + teal (streaming ops), not causa-slate / purple SaaS
 BLUE, GREEN, RED, AMBER, SLATE, TEAL = (
@@ -85,7 +87,7 @@ KIND_COLOR = {
 
 _PAGE_ICON = str(LOGO_PNG) if LOGO_PNG.exists() else "◈"
 st.set_page_config(
-    page_title="Ballast · K8s incident response",
+    page_title="Ballast · GitOps incident response",
     layout="wide",
     page_icon=_PAGE_ICON,
 )
@@ -98,6 +100,44 @@ def badge(text: str, color: str) -> str:
 
 def conf_color(score: float) -> str:
     return GREEN if score >= 0.8 else AMBER if score >= 0.5 else RED
+
+
+def conf_label(score: float) -> str:
+    return "High confidence" if score >= 0.8 else (
+        "Moderate confidence" if score >= 0.5 else "Low confidence"
+    )
+
+
+def confidence_gauge(score: float) -> str:
+    """Return an SVG semicircular gauge for a 0..1 confidence score."""
+    score = max(0.0, min(1.0, float(score)))
+    color = conf_color(score)
+    cx, cy, r = 95, 92, 74
+    arc_len = math.pi * r
+    offset = arc_len * (1 - score)
+    # Needle angle: 180° (left) at 0.0 → 0° (right) at 1.0.
+    angle = math.pi * (1 - score)
+    nx = cx + (r - 20) * math.cos(angle)
+    ny = cy - (r - 20) * math.sin(angle)
+    track = f"M {cx - r} {cy} A {r} {r} 0 0 1 {cx + r} {cy}"
+    return (
+        f'<div class="ballast-gauge">'
+        f'<svg viewBox="0 0 190 118" width="190" height="118" '
+        f'role="img" aria-label="Confidence {score:.0%}">'
+        f'<path d="{track}" fill="none" stroke="#e5e7eb" stroke-width="14" '
+        f'stroke-linecap="round"/>'
+        f'<path d="{track}" fill="none" stroke="{color}" stroke-width="14" '
+        f'stroke-linecap="round" stroke-dasharray="{arc_len:.2f}" '
+        f'stroke-dashoffset="{offset:.2f}"/>'
+        f'<line x1="{cx}" y1="{cy}" x2="{nx:.1f}" y2="{ny:.1f}" '
+        f'stroke="#0b1220" stroke-width="3" stroke-linecap="round"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="5" fill="#0b1220"/>'
+        f'<text x="{cx}" y="{cy - 20}" text-anchor="middle" '
+        f'class="ballast-gauge-value" fill="{color}">{score:.0%}</text>'
+        f"</svg>"
+        f'<div class="ballast-gauge-label">{conf_label(score)}</div>'
+        f"</div>"
+    )
 
 
 def parse_ts(value: str | None) -> datetime | None:
@@ -263,6 +303,102 @@ def api_post(path: str, body: dict | None = None, *, timeout: int = 10):
         return None
 
 
+def api_delete(path: str, *, timeout: int = 10):
+    try:
+        r = requests.delete(f"{API}{path}", timeout=timeout)
+        r.raise_for_status()
+        return r.json() if r.content else {}
+    except Exception as exc:
+        st.error(f"API error: {exc}")
+        return None
+
+
+def _record_signature(rec: dict) -> tuple:
+    """Material state of an investigation — a change here warrants a full refresh."""
+    return (
+        rec.get("status"),
+        bool(rec.get("rca")),
+        rec.get("remediation_status"),
+        bool(rec.get("remediation_pr_url")),
+        bool(rec.get("github_issue_url")),
+        len(rec.get("events") or []),
+    )
+
+
+def _should_poll(rec: dict) -> bool:
+    """Is this investigation still doing something worth watching?"""
+    if rec.get("status") in RUNNING:
+        return True
+    rs = rec.get("remediation_status")
+    if rs in ("queued", "creating_issue", "launching_agent") and not rec.get(
+        "remediation_pr_url"
+    ):
+        return True
+    if (
+        rec.get("github_issue_url")
+        and not rec.get("remediation_pr_url")
+        and rs in ("complete", "failed")
+    ):
+        return True
+    return False
+
+
+@st.fragment(run_every=3.0)
+def live_refresh_indicator(investigation_id: str) -> None:
+    """Poll a running investigation in place (no full-page reload).
+
+    Reruns the whole app only when material state changes; otherwise just
+    repaints this small indicator, so the page no longer 'pulses'.
+    """
+    if not st.session_state.get("auto_refresh", True):
+        st.markdown(
+            '<div class="ballast-live ballast-live-off">'
+            f'{mdi("pause_circle")} live off</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    latest = api_get(f"/investigations/{investigation_id}", quiet=True) or {}
+    if not latest:
+        return
+
+    key = f"_livesig_{investigation_id}"
+    tick_key = f"_reconcile_ticks_{investigation_id}"
+    new_sig = _record_signature(latest)
+    old_sig = st.session_state.get(key)
+
+    # Material change since the last full render → refresh the whole app once.
+    if old_sig is not None and new_sig != old_sig:
+        # Verdict just landed (rca went absent -> present): notify.
+        if not old_sig[1] and new_sig[1]:
+            st.session_state["_verdict_toast_id"] = investigation_id
+        st.session_state[key] = new_sig
+        st.session_state.pop(tick_key, None)
+        st.rerun(scope="app")
+        return
+    st.session_state[key] = new_sig
+
+    active = _should_poll(latest)
+    # Cap the issue->PR reconcile so a missing PR doesn't poll forever.
+    if active and latest.get("status") not in RUNNING:
+        ticks = int(st.session_state.get(tick_key, 0)) + 1
+        st.session_state[tick_key] = ticks
+        if ticks >= _RECONCILE_TICK_CAP:
+            active = False
+
+    if active:
+        st.markdown(
+            f'<div class="ballast-live">{mdi("sync")} live · refreshing</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="ballast-live ballast-live-idle">'
+            f'{mdi("check_circle", filled=True)} up to date</div>',
+            unsafe_allow_html=True,
+        )
+
+
 def render_service_stat_cards(
     service: str,
     kube: dict | None,
@@ -303,10 +439,12 @@ def render_service_stat_cards(
         unsafe_allow_html=True,
     )
 
+    mem_fact = f"<span>Memory</span> <strong>{html_lib.escape(str(mem))}</strong>"
+    if healthy_mem not in ("—", None, "") and str(healthy_mem) != str(mem):
+        mem_fact += f" <span>(healthy {html_lib.escape(str(healthy_mem))})</span>"
     facts = [
         f"<span>Service</span> <strong>{html_lib.escape(service)}</strong>",
-        f"<span>Memory</span> <strong>{html_lib.escape(str(mem))}</strong>"
-        f" <span>(healthy {html_lib.escape(str(healthy_mem))})</span>",
+        mem_fact,
         f"<span>ArgoCD</span> <strong>{html_lib.escape(str(sync))}</strong>"
         f" / <strong>{html_lib.escape(str(health))}</strong>",
     ]
@@ -325,22 +463,163 @@ def render_service_stat_cards(
     )
 
 
+def render_signal_checklist(
+    primary: str,
+    signals: dict,
+    *,
+    alertname: str = "StreamIngestCrashLooping",
+) -> None:
+    """Checklist of Prometheus / Kubernetes / ArgoCD triggers for the primary service."""
+    prom = signals.get("prometheus") or {}
+    kube = signals.get("kubernetes") or {}
+    argo = signals.get("argocd") or {}
+
+    def code(text: str) -> str:
+        return f"<code>{html_lib.escape(str(text))}</code>"
+
+    rows: list[tuple[str, str, str]] = []
+
+    prom_state = prom.get("state")
+    if prom.get("error") or prom_state == "error":
+        rows.append(("unk", "Prometheus", f"unreachable — {html_lib.escape(str(prom.get('error')))}"))
+    elif prom.get("firing") or prom_state == "firing":
+        fired = prom.get("fired_at")
+        when = f" since {code(fired)}" if fired else ""
+        rows.append(("bad", "Prometheus", f"{code(alertname)} firing{when}"))
+    elif prom_state == "pending":
+        fired = prom.get("fired_at")
+        when = f" since {code(fired)}" if fired else ""
+        rows.append(
+            ("warn", "Prometheus", f"{code(alertname)} pending — in <code>for:</code> window{when}")
+        )
+    else:
+        rows.append(("ok", "Prometheus", f"{code(alertname)} quiet"))
+
+    if kube.get("error"):
+        rows.append(("unk", "Kubernetes", f"unreachable — {html_lib.escape(str(kube['error']))}"))
+    elif kube.get("incident"):
+        reasons = kube.get("reasons") or []
+        detail = html_lib.escape("; ".join(reasons) if reasons else "unhealthy pods")
+        rows.append(("bad", "Kubernetes", detail))
+    else:
+        pod = kube.get("pod_state") or "—"
+        ready = kube.get("ready_pods")
+        total = kube.get("total_pods")
+        mem = kube.get("memory_limit")
+        bits = [f"pods {code(pod)}"]
+        if ready is not None and total is not None:
+            bits.append(f"{ready}/{total} ready")
+        if mem:
+            bits.append(f"mem {code(mem)}")
+        rows.append(("ok", "Kubernetes", " · ".join(bits) if bits else "healthy"))
+
+    if argo.get("error"):
+        rows.append(("unk", "ArgoCD", f"unreachable — {html_lib.escape(str(argo['error']))}"))
+    elif argo.get("note") and not argo.get("sync_status"):
+        rows.append(("unk", "ArgoCD", html_lib.escape(str(argo["note"]))))
+    elif argo.get("incident"):
+        reasons = argo.get("reasons") or []
+        sync = argo.get("sync_status") or "—"
+        health = argo.get("health_status") or "—"
+        detail = html_lib.escape("; ".join(reasons) if reasons else "unhealthy")
+        detail += f" ({code(sync)} / {code(health)})"
+        rows.append(("bad", "ArgoCD", detail))
+    else:
+        sync = argo.get("sync_status") or "—"
+        health = argo.get("health_status") or "—"
+        rows.append(("ok", "ArgoCD", f"sync {code(sync)} · health {code(health)}"))
+
+    icon = {
+        "ok": mdi("check_circle", filled=True),
+        "bad": mdi("cancel", filled=True),
+        "warn": mdi("schedule", filled=True),
+        "unk": mdi("help", filled=True),
+    }
+    body = []
+    for state, name, detail in rows:
+        body.append(
+            f'<div class="ballast-signal-row ballast-signal-{state}">'
+            f"{icon[state]}"
+            f'<span class="ballast-signal-name">{html_lib.escape(name)}</span>'
+            f'<span class="ballast-signal-detail">{detail}</span>'
+            f"</div>"
+        )
+
+    st.markdown(
+        f'<div class="ballast-signals">'
+        f'<div class="ballast-signals-head">'
+        f"<span>Signal checks</span>"
+        f'<span class="ballast-signals-svc">{html_lib.escape(primary)}</span>'
+        f"</div>"
+        f"{''.join(body)}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_cluster_overview(overview: dict) -> None:
     primary = overview.get("primary_service", "ingest")
     argo = overview.get("argocd") or {}
     pf = overview.get("preflight") or {}
     healthy = overview.get("healthy", False)
     ballast_firing = overview.get("ballast_alert_firing", False)
+    incident = overview.get("incident_detected") or pf.get("incident_detected", False)
+    signals = overview.get("signals") or pf.get("signals") or {}
+    alertname = pf.get("alertname") or "StreamIngestCrashLooping"
 
     if healthy:
-        st.success("Cluster looks good — deployments and ArgoCD are healthy. No firing demo alerts.")
-    elif ballast_firing:
-        st.warning(
-            f"**{pf.get('alertname', 'StreamIngestCrashLooping')}** is firing for **{primary}**. "
-            "Click **Investigate** for RCA, evidence, and an auto-fix PR."
+        st.markdown(
+            f'<div class="ballast-healthy">'
+            f'{mdi("check_circle", filled=True)} Fleet healthy — no active incidents'
+            f"</div>",
+            unsafe_allow_html=True,
         )
-    else:
-        st.info("Some services need attention. Review the board or click **Investigate**.")
+
+    render_signal_checklist(primary, signals, alertname=alertname)
+
+    if not healthy:
+        existing = pf.get("existing_investigation_id")
+        if pf.get("investigation_active") and existing:
+            st.markdown(
+                f'<p class="ballast-signals-note">'
+                f'Investigation <code>{html_lib.escape(existing)}</code> is already running — '
+                f"open it in the sidebar.</p>",
+                unsafe_allow_html=True,
+            )
+        elif pf.get("already_investigated") and existing:
+            st.markdown(
+                f'<p class="ballast-signals-note">'
+                f'Already investigated as <code>{html_lib.escape(existing)}</code> — '
+                f"open it in the sidebar, or click <strong>Investigate</strong> to jump there.</p>",
+                unsafe_allow_html=True,
+            )
+        elif incident and pf.get("ready"):
+            st.markdown(
+                f'<p class="ballast-signals-note">'
+                f"Failing signals on <strong>{html_lib.escape(primary)}</strong> — "
+                f"click <strong>Investigate</strong> for RCA and an auto-fix PR.</p>",
+                unsafe_allow_html=True,
+            )
+        elif not incident:
+            degraded = [
+                s.get("service")
+                for s in overview.get("services", [])
+                if not s.get("healthy")
+            ]
+            if degraded:
+                st.markdown(
+                    f'<p class="ballast-signals-note">'
+                    f"Workload attention on <strong>{html_lib.escape(', '.join(degraded))}</strong>, "
+                    f"but no CrashLoop / OOM / ArgoCD Degraded / alert trigger yet. "
+                    f"Run <code>task break</code> to induce the demo incident.</p>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f'<p class="ballast-signals-note">'
+                    f"No incident triggers. Run <code>task break</code> to induce CrashLoop / OOM.</p>",
+                    unsafe_allow_html=True,
+                )
 
     kube_primary = next(
         (s for s in overview.get("services", []) if s.get("service") == primary),
@@ -476,7 +755,15 @@ def build_incident_timeline(
     brief = record.get("brief") or {}
     alert = brief.get("alert") or {}
     rollout = brief.get("rollout") or {}
-    add(alert.get("fired_at"), "alert", f"Alert fired — {alert.get('alertname', '')}")
+    if alert.get("observed", True):
+        add(alert.get("fired_at"), "alert", f"Alert fired — {alert.get('alertname', '')}")
+    elif alert.get("fired_at"):
+        add(
+            alert.get("fired_at"),
+            "note",
+            f"Alert not observed yet — {alert.get('alertname', '')}",
+            "Investigating from Kubernetes / ArgoCD signals",
+        )
     add(rollout.get("rollout_at"), "rollout", "Kubernetes rollout detected", record["service"])
 
     argo = argocd or brief.get("argocd")
@@ -798,29 +1085,42 @@ def render_autofix_status(record: dict, action: str) -> None:
 def render_rca_panel(record: dict, rca: dict) -> None:
     score = rca["confidence"]["score"]
     act = rca["recommended_action"]["action"]
+    action_label = act.replace("_", " ")
 
-    top = st.columns([1.2, 1, 1])
-    with top[0]:
+    # ── Verdict header: gauge + summary/decision, in one bordered card ──
+    with st.container(border=True):
+        gcol, scol = st.columns([1, 2.4], vertical_alignment="center")
+        with gcol:
+            st.markdown(confidence_gauge(score), unsafe_allow_html=True)
+        with scol:
+            st.markdown(
+                f'<div class="ballast-verdict-meta">'
+                f'{badge_inline(action_label, ACTION_COLOR.get(act, SLATE))} '
+                f'{badge_inline("by " + rca["generated_by"], SLATE)}'
+                f'<span class="ballast-verdict-when">{fmt_dt(record.get("created_at"))}</span>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'<p class="ballast-verdict-summary">{html_lib.escape(rca["summary"])}</p>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'<p class="ballast-verdict-rationale">'
+                f'{mdi("insights")} {html_lib.escape(rca["confidence"]["rationale"])}</p>',
+                unsafe_allow_html=True,
+            )
+
+    # ── Recommended action — the primary job of this view ──
+    with st.container(border=True):
         st.markdown(
-            f"Confidence &nbsp; "
-            f'<span style="color:{conf_color(score)};font-weight:700">{score:.0%}</span>',
+            f'<p class="ballast-pane-title">{mdi("bolt")} Recommended action · '
+            f'<strong>{html_lib.escape(action_label)}</strong></p>',
             unsafe_allow_html=True,
         )
-        st.progress(score)
-    with top[1]:
-        st.badge(act.replace("_", " "), color=streamlit_badge_color(act))
-    with top[2]:
-        st.badge(rca["generated_by"], color="blue")
-        st.caption(fmt_dt(record.get("created_at")))
-
-    st.markdown(f"### {rca['summary']}")
-    st.caption(rca["confidence"]["rationale"])
-
-    # Decision first — recommended action is the primary job of this view
-    st.markdown("**Recommended action**")
-    st.write(rca["recommended_action"]["reasoning"])
-    st.code(rca["recommended_action"]["remediation"], language="bash")
-    render_autofix_status(record, act)
+        st.write(rca["recommended_action"]["reasoning"])
+        st.code(rca["recommended_action"]["remediation"], language="bash")
+        render_autofix_status(record, act)
 
     corr = rca["rollout_correlation"]
     rc = rca["resource_change"]
@@ -911,16 +1211,17 @@ with st.sidebar:
         )
         if res and res.get("_conflict"):
             detail = res["_conflict"]
-            if detail.get("cluster_healthy") and not detail.get("alert_firing"):
+            existing = detail.get("existing_investigation_id")
+            if existing:
+                st.session_state.pop("all_good", None)
+                st.session_state["selected"] = existing
+            elif detail.get("cluster_healthy") and not detail.get("incident_detected") and not detail.get("alert_firing"):
                 st.session_state["all_good"] = True
                 st.session_state["selected"] = CLUSTER_VIEW
             else:
                 st.session_state.pop("all_good", None)
                 hint = detail.get("hint") or "; ".join(detail.get("blockers") or [])
                 st.warning(hint)
-                existing = detail.get("existing_investigation_id")
-                if existing:
-                    st.session_state["selected"] = existing
         elif res and res.get("id"):
             st.session_state.pop("all_good", None)
             st.session_state["selected"] = res["id"]
@@ -928,7 +1229,8 @@ with st.sidebar:
     auto = st.checkbox(
         "Auto-refresh while investigating",
         value=True,
-        help="Polls only while an investigation or autofix is in progress — not on cluster overview.",
+        key="auto_refresh",
+        help="Live-refreshes only the running investigation in place — no full-page reload.",
     )
     st.divider()
 
@@ -941,6 +1243,8 @@ with st.sidebar:
         options[rec["id"]] = rec
 
     ids = [CLUSTER_VIEW] + [rec["id"] for rec in investigations]
+    if st.session_state.pop("_reset_selection", False):
+        st.session_state["selected"] = CLUSTER_VIEW
     if "selected" not in st.session_state or st.session_state["selected"] not in ids:
         st.session_state["selected"] = CLUSTER_VIEW
 
@@ -949,7 +1253,7 @@ with st.sidebar:
             return "Cluster overview"
         rec = options[iid]
         disp = "●" if rec["status"] in RUNNING else "○"
-        return f"{disp} {rec['service']} · {rec['status']}"
+        return f"{disp} {iid} · {rec['service']} · {rec['status']}"
 
     st.radio("Investigations", ids, format_func=_label, key="selected")
     if total_investigations > SIDEBAR_INVESTIGATION_LIMIT:
@@ -965,18 +1269,36 @@ with st.sidebar:
         iid = html_lib.escape(rec["id"])
         st.markdown(
             f'<div class="ballast-side-meta">'
-            f'<p class="ballast-side-meta-alert">{mdi("notification_important")} {alert}</p>'
+            f'<p class="ballast-side-meta-alert">{mdi("confirmation_number")} {iid}</p>'
             f'<div class="ballast-side-meta-row">'
+            f"<span>{alert}</span>"
             f"<span>{when}</span>"
-            f'<span class="ballast-side-meta-id">{iid}</span>'
             f"</div></div>",
             unsafe_allow_html=True,
         )
-    elif not investigations:
-        st.caption(
-            "No investigations yet. When a CrashLoop alert fires, click **Investigate** "
-            "to run RCA and open a fix PR."
+
+    if total_investigations:
+        st.divider()
+        confirm_clear = st.checkbox(
+            "Confirm clear all",
+            key="confirm_clear_investigations",
+            help="Required before clearing — removes every investigation and its artifacts.",
         )
+        if st.button(
+            "Clear all investigations",
+            use_container_width=True,
+            disabled=not confirm_clear,
+            type="secondary",
+        ):
+            res = api_delete("/investigations")
+            if res is not None:
+                # `selected` is the radio widget key — can't be set after the
+                # widget exists. Signal the reset and apply it before the radio
+                # is built on the next run.
+                st.session_state["_reset_selection"] = True
+                st.session_state.pop("confirm_clear_investigations", None)
+                st.session_state.pop("all_good", None)
+                st.rerun()
 
     if st.session_state.get("api_error"):
         st.warning(st.session_state["api_error"])
@@ -1001,7 +1323,12 @@ if cluster_mode:
     if st.button("Refresh overview", type="secondary"):
         st.rerun()
     if st.session_state.pop("all_good", False):
-        st.success("Cluster looks good — no firing demo alerts and workloads are healthy.")
+        st.markdown(
+            f'<div class="ballast-healthy">'
+            f'{mdi("check_circle", filled=True)} Fleet healthy — no active incidents'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
     render_cluster_overview(overview)
 elif not record:
     st.info("Select **Cluster overview** in the sidebar or click **Investigate**.")
@@ -1009,17 +1336,28 @@ else:
     head_l, head_r = st.columns([5, 1])
     with head_l:
         masthead(
-            f"{record['alertname']} · {record['service']}",
-            f"Opened {fmt_dt(record.get('created_at'))}",
-            icon="troubleshoot",
+            f"{record['id']} · {record['service']}",
+            f"{record['alertname']} · opened {fmt_dt(record.get('created_at'))}",
+            icon="confirmation_number",
         )
         stage_pills("Investigation", ["Overview", "Investigation"], icons=STAGE_ICONS)
-    with head_r:
-        st.badge(record["status"], color=streamlit_badge_color(record["status"]))
 
     brief = record.get("brief") or {}
     rollout = brief.get("rollout") or {}
     rca = record.get("rca")
+
+    # Seed the live fragment's baseline BEFORE it runs, so this full render
+    # doesn't immediately trigger another refresh.
+    st.session_state[f"_livesig_{record['id']}"] = _record_signature(record)
+
+    with head_r:
+        st.badge(record["status"], color=streamlit_badge_color(record["status"]))
+        live_refresh_indicator(record["id"])
+
+    # Toast once when the Verdict lands (rca transitioned absent -> present).
+    if st.session_state.get("_verdict_toast_id") == record["id"] and rca:
+        st.toast(f"Verdict ready for {record['id']}", icon=":material/gavel:")
+        st.session_state.pop("_verdict_toast_id", None)
 
     render_service_stat_cards(
         record["service"],
@@ -1072,12 +1410,12 @@ else:
     # Root cause first when RCA exists — one job per view
     if rca:
         tab_rca, tab_timeline, tab_gitops, tab_investigation = st.tabs(
-            ["Verdict", "Signal trail", "GitOps", "Agent feed"]
+            ["Verdict", "Incident Timeline", "GitOps", "Agent feed"]
         )
     else:
         tab_timeline, tab_gitops, tab_investigation, tab_rca = st.tabs(
             [
-                "Signal trail",
+                "Incident Timeline",
                 "GitOps",
                 "Agent feed",
                 "Verdict",
@@ -1087,7 +1425,7 @@ else:
     timeline_rows = build_incident_timeline(record, argocd_live, rca)
 
     with tab_timeline:
-        pane_title("Signal trail", icon="timeline")
+        pane_title("Incident Timeline", icon="timeline")
         with st.container(border=True):
             render_timeline(timeline_rows)
         st.caption(f"{len(timeline_rows)} events")
@@ -1109,31 +1447,6 @@ else:
         else:
             render_rca_panel(record, rca)
 
-needs_refresh = False
-if record and record["status"] in RUNNING and selected and auto:
-    needs_refresh = True
-elif record and record.get("remediation_status") in (
-    "queued",
-    "creating_issue",
-    "launching_agent",
-) and not record.get("remediation_pr_url") and auto:
-    needs_refresh = True
-elif (
-    record
-    and auto
-    and record.get("github_issue_url")
-    and not record.get("remediation_pr_url")
-    and record.get("remediation_status") in ("complete", "failed")
-):
-    # PR may already exist on GitHub; GET reconciles from the issue timeline.
-    # Cap polling so a missing PR doesn't spin forever.
-    wait_key = f"pr_reconcile_waits_{record['id']}"
-    waits = int(st.session_state.get(wait_key, 0))
-    if waits < 20:  # ~60s at 3s interval
-        st.session_state[wait_key] = waits + 1
-        needs_refresh = True
-# Cluster overview stays static — full-page rerun there caused constant UI flash.
-
-if needs_refresh:
-    time.sleep(3.0)
-    st.rerun()
+# Live updates while investigating are handled in place by
+# `live_refresh_indicator` (a fragment) — no full-page rerun / pulse here.
+# Cluster overview stays static and is refreshed via the manual button.

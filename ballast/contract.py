@@ -44,6 +44,7 @@ class TimelineKind(str, Enum):
     rollout = "rollout"
     chart_bump = "chart_bump"
     crashloop = "crashloop"
+    argocd = "argocd"
     note = "note"
 
 
@@ -99,14 +100,16 @@ class Evidence(BaseModel):
 
 
 class RolloutCorrelation(BaseModel):
-    """The core triage signal: the rollout that shipped the change vs the alert.
+    """Rollout vs primary symptom time (alert, or kube/Argo anchor if no alert).
 
-    ``delta_seconds`` is ``alert_fired_at - rollout_at``; a small positive delta
-    is the fingerprint of "this rollout caused this alert". ``correlated`` is the
-    engine's boolean call given the configured window."""
+    ``delta_seconds`` is ``alert_fired_at - rollout_at``. A small positive delta
+    fingerprints "this rollout caused the incident". ``alert_fired_at`` may be the
+    Prometheus ``activeAt`` or a symptom anchor (ArgoCD sync / investigation time)
+    when the alert is not yet observed. ``correlated`` is the engine's boolean
+    call given the configured window."""
 
     rollout_at: str  # ISO-8601, when the offending ReplicaSet/rollout was created
-    alert_fired_at: str  # ISO-8601
+    alert_fired_at: str  # ISO-8601 — alert or symptom-anchor time
     delta_seconds: float
     correlated: bool
     window_seconds: int

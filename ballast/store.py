@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 from datetime import datetime, timezone
 from enum import Enum
@@ -23,6 +24,7 @@ from .investigator import InvestigationEvent
 
 _ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_DATA_DIR = _ROOT / ".ballast"
+_INCIDENT_PREFIX = os.environ.get("BALLAST_INCIDENT_PREFIX", "INC-")
 
 
 def _data_dir() -> Path:
@@ -80,6 +82,17 @@ class InvestigationRecord(BaseModel):
     remediation_error: str | None = None
 
 
+def _parse_incident_number(investigation_id: str) -> int | None:
+    """Extract the integer from ``INC-0042``-style ids; None for legacy ids."""
+    prefix = _INCIDENT_PREFIX
+    if not investigation_id.startswith(prefix):
+        return None
+    rest = investigation_id[len(prefix) :]
+    if not rest.isdigit():
+        return None
+    return int(rest)
+
+
 class InvestigationStore:
     def __init__(self, data_dir: Path | None = None) -> None:
         self._data_dir = data_dir or _data_dir()
@@ -87,6 +100,7 @@ class InvestigationStore:
         self._artifacts_dir = self._data_dir / "artifacts"
         self._records: dict[str, InvestigationRecord] = {}
         self._artifacts: dict[str, dict[str, bytes]] = {}
+        self._next_incident_number: int = 1
         self._lock = threading.RLock()
         self._load()
 
@@ -105,12 +119,16 @@ class InvestigationStore:
         items = raw.get("investigations") if isinstance(raw, dict) else raw
         if not isinstance(items, list):
             return
+        max_num = 0
         for item in items:
             try:
                 record = InvestigationRecord.model_validate(item)
             except Exception:
                 continue
             self._records[record.id] = record
+            n = _parse_incident_number(record.id)
+            if n is not None and n > max_num:
+                max_num = n
             # Hydrate artifact bytes from disk when present.
             art_dir = self._artifacts_dir / record.id
             if art_dir.is_dir():
@@ -126,12 +144,20 @@ class InvestigationStore:
                     for name in blob:
                         if name not in record.artifact_names:
                             record.artifact_names.append(name)
+        persisted_next = 0
+        if isinstance(raw, dict):
+            try:
+                persisted_next = int(raw.get("next_incident_number") or 0)
+            except (TypeError, ValueError):
+                persisted_next = 0
+        self._next_incident_number = max(persisted_next, max_num + 1, 1)
 
     def _persist_unlocked(self) -> None:
         self._ensure_dirs()
         payload = {
             "version": 1,
             "updated_at": _now(),
+            "next_incident_number": self._next_incident_number,
             "investigations": [
                 r.model_dump(mode="json")
                 for r in sorted(
@@ -147,6 +173,16 @@ class InvestigationStore:
         with self._lock:
             self._persist_unlocked()
 
+    def allocate_incident_id(self) -> str:
+        """Allocate the next unique incident ticket id (e.g. ``INC-0042``)."""
+        with self._lock:
+            n = self._next_incident_number
+            self._next_incident_number = n + 1
+            # Persist the counter even before the record is created, so a crash
+            # mid-create does not reuse the number.
+            self._persist_unlocked()
+            return f"{_INCIDENT_PREFIX}{n:04d}"
+
     def create(self, record: InvestigationRecord) -> None:
         with self._lock:
             self._records[record.id] = record
@@ -161,6 +197,24 @@ class InvestigationStore:
             return sorted(
                 self._records.values(), key=lambda r: r.created_at, reverse=True
             )
+
+    def clear_all(self) -> int:
+        """Remove every investigation record and on-disk artifacts. Returns count cleared."""
+        with self._lock:
+            count = len(self._records)
+            self._records.clear()
+            self._artifacts.clear()
+            self._persist_unlocked()
+            if self._artifacts_dir.is_dir():
+                for child in self._artifacts_dir.iterdir():
+                    if child.is_dir():
+                        shutil.rmtree(child, ignore_errors=True)
+                    elif child.is_file():
+                        try:
+                            child.unlink()
+                        except OSError:
+                            pass
+            return count
 
     def update(self, investigation_id: str, **fields) -> None:
         with self._lock:
@@ -220,8 +274,15 @@ class InvestigationStore:
             return msg
 
     def has_active_for_alert(self, alertname: str, service: str) -> bool:
+        return self.find_active_for_alert(alertname, service) is not None
+
+    def find_active_for_alert(
+        self, alertname: str, service: str
+    ) -> InvestigationRecord | None:
         with self._lock:
-            for record in self._records.values():
+            for record in sorted(
+                self._records.values(), key=lambda r: r.created_at, reverse=True
+            ):
                 if (
                     record.alertname == alertname
                     and record.service == service
@@ -232,8 +293,8 @@ class InvestigationStore:
                         InvestigationStatus.investigating,
                     )
                 ):
-                    return True
-            return False
+                    return record
+            return None
 
     def _episode_ts(self, record: InvestigationRecord) -> str | None:
         if record.alert_fired_at:
@@ -279,6 +340,29 @@ class InvestigationStore:
                     InvestigationStatus.triaging,
                     InvestigationStatus.investigating,
                 ):
+                    return record
+            return None
+
+    def find_recent_for_service(
+        self, service: str, *, within_seconds: int = 3600
+    ) -> InvestigationRecord | None:
+        """Newest investigation for ``service`` created within ``within_seconds``."""
+        from datetime import datetime, timezone
+
+        cutoff = datetime.now(timezone.utc).timestamp() - within_seconds
+        with self._lock:
+            for record in sorted(
+                self._records.values(), key=lambda r: r.created_at, reverse=True
+            ):
+                if record.service != service:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(
+                        record.created_at.replace("Z", "+00:00")
+                    ).timestamp()
+                except ValueError:
+                    continue
+                if ts >= cutoff:
                     return record
             return None
 

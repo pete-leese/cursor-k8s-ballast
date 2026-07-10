@@ -1,8 +1,8 @@
 """The deterministic RCA engine.
 
 Given a service, this runs cheap triage against the live cluster (Prometheus +
-Kubernetes) and the declared topology, correlates the rollout timestamp with the
-alert firing time, characterises the offending resource change, and emits a
+Kubernetes) and the declared topology, correlates the rollout timestamp with Kubernetes,
+ArgoCD, and (when present) Prometheus alert signals, characterises the offending resource change, and emits a
 strict RCA validated against ``ballast.contract.RCA``.
 
 This is the ``engine`` investigator: it needs no LLM and no Cursor call, so the
@@ -111,13 +111,24 @@ def assemble_brief(
     else:
         degraded.append("argocd source not configured")
 
+    alert_observed = fired_at is not None
+    if not fired_at:
+        # Symptom anchor when investigating from kube/Argo before the alert fires.
+        if argocd_ctx and argocd_ctx.last_sync_finished:
+            fired_at = argocd_ctx.last_sync_finished
+        elif rollout_at:
+            fired_at = rollout_at
+        else:
+            fired_at = _now_iso()
+
     return InvestigationBrief(
         investigation_id=investigation_id,
         service=service,
         namespace=namespace,
         alert=AlertContext(
             alertname=alertname,
-            fired_at=fired_at or _now_iso(),
+            fired_at=fired_at,
+            observed=alert_observed,
             expr=expr,
             severity=severity,
             labels=labels,
@@ -144,15 +155,47 @@ def analyze(
     chart_version_from: str | None = None,
     chart_version_to: str | None = None,
 ) -> RCA:
-    """Turn a brief into a validated RCA using deterministic rules."""
+    """Turn a brief into a validated RCA using multi-signal deterministic rules.
+
+    Correlates Kubernetes crash state, ArgoCD sync/health, and (when observed)
+    the Prometheus alert against the rollout timestamp — not alert-only.
+    """
     service = brief.service
     ns = brief.namespace
     dependents = brief.blast_radius_hint
     crash = brief.rollout.crash_state or {}
+    alert_observed = brief.alert.observed
 
-    # --- rollout <-> alert correlation --------------------------------------
-    alert_dt = _parse_ts(brief.alert.fired_at)
-    rollout_iso = brief.rollout.rollout_at or brief.alert.fired_at
+    # --- crash / resource signals -------------------------------------------
+    oom = (
+        crash.get("last_terminated_reason") == "OOMKilled"
+        or crash.get("exit_code") == 137
+    )
+    waiting = crash.get("waiting_reason")
+    restarts = crash.get("restarts", 0)
+    crash_signal = bool(oom or waiting == "CrashLoopBackOff")
+
+    current_mem = brief.rollout.current_memory_limit or "unknown"
+    healthy_mem = brief.rollout.healthy_memory_limit or "unknown"
+    mem_regressed = (
+        current_mem != "unknown"
+        and healthy_mem != "unknown"
+        and current_mem != healthy_mem
+    )
+
+    argo = brief.argocd
+    argo_bad = False
+    if argo is not None:
+        argo_bad = argo.health_status in ("Degraded", "Missing", "Suspended") or (
+            argo.sync_status == "OutOfSync"
+        ) or (argo.health_status == "Progressing" and crash_signal)
+
+    # --- rollout <-> symptom correlation ------------------------------------
+    symptom_iso = brief.alert.fired_at
+    if not alert_observed and argo and argo.last_sync_finished:
+        symptom_iso = argo.last_sync_finished
+    rollout_iso = brief.rollout.rollout_at or symptom_iso
+    alert_dt = _parse_ts(symptom_iso)
     rollout_dt = _parse_ts(rollout_iso)
     delta = (alert_dt - rollout_dt).total_seconds()
     correlated = 0 <= delta <= window_seconds
@@ -165,8 +208,6 @@ def analyze(
     )
 
     # --- the resource regression --------------------------------------------
-    current_mem = brief.rollout.current_memory_limit or "unknown"
-    healthy_mem = brief.rollout.healthy_memory_limit or "unknown"
     resource_change = ResourceChange(
         field="resources.limits.memory",
         previous=healthy_mem,
@@ -182,15 +223,7 @@ def analyze(
         ),
     )
 
-    # --- crash signals ------------------------------------------------------
-    oom = (
-        crash.get("last_terminated_reason") == "OOMKilled"
-        or crash.get("exit_code") == 137
-    )
-    waiting = crash.get("waiting_reason")
-    restarts = crash.get("restarts", 0)
-
-    # --- timeline -----------------------------------------------------------
+    # --- timeline (all available signals) -----------------------------------
     timeline = [
         TimelineEvent(
             timestamp=correlation.rollout_at,
@@ -206,25 +239,66 @@ def analyze(
             label=f"charts/ballast-service values: memory {healthy_mem} -> {current_mem}",
         ),
     ]
-    if oom or waiting == "CrashLoopBackOff":
+    if argo is not None:
+        argo_ts = (
+            argo.last_sync_finished
+            or argo.last_sync_started
+            or correlation.rollout_at
+        )
+        timeline.append(
+            TimelineEvent(
+                timestamp=argo_ts,
+                kind=TimelineKind.argocd,
+                label=(
+                    f"ArgoCD `{argo.application or service}`: "
+                    f"sync={argo.sync_status or '?'}, "
+                    f"health={argo.health_status or '?'}"
+                    + (
+                        f", revision={(argo.revision or '')[:12]}"
+                        if argo.revision
+                        else ""
+                    )
+                ),
+            )
+        )
+    if crash_signal:
         timeline.append(
             TimelineEvent(
                 timestamp=correlation.alert_fired_at,
                 kind=TimelineKind.crashloop,
                 label=(
-                    f"{service} pods OOMKilled and entered CrashLoopBackOff "
-                    f"({restarts} restarts observed)"
+                    f"{service} pods "
+                    + (
+                        "OOMKilled and entered CrashLoopBackOff"
+                        if oom
+                        else "entered CrashLoopBackOff"
+                    )
+                    + f" ({restarts} restarts observed)"
                 ),
             )
         )
-    timeline.append(
-        TimelineEvent(
-            timestamp=correlation.alert_fired_at,
-            kind=TimelineKind.alert,
-            label=f"{brief.alert.alertname} fired for {service}",
-            deeplink=PROM_ALERTS_URL,
+    if alert_observed:
+        timeline.append(
+            TimelineEvent(
+                timestamp=correlation.alert_fired_at,
+                kind=TimelineKind.alert,
+                label=f"{brief.alert.alertname} fired for {service}",
+                deeplink=PROM_ALERTS_URL,
+            )
         )
-    )
+    else:
+        timeline.append(
+            TimelineEvent(
+                timestamp=correlation.alert_fired_at,
+                kind=TimelineKind.note,
+                label=(
+                    f"{brief.alert.alertname} not observed yet — investigating from "
+                    f"Kubernetes"
+                    + (" + ArgoCD" if argo is not None else "")
+                    + " signals"
+                ),
+            )
+        )
 
     # --- evidence -----------------------------------------------------------
     evidence = [
@@ -247,18 +321,36 @@ def analyze(
             ),
             deeplink=None,
         ),
-        Evidence(
-            source=EvidenceSource.prometheus,
-            detail=(
-                f"{brief.alert.alertname} is firing; alert activeAt "
-                f"{correlation.alert_fired_at} is {correlation.delta_seconds:.0f}s "
-                f"after the rollout at {correlation.rollout_at} "
-                f"({'within' if correlated else 'outside'} the "
-                f"{window_seconds}s correlation window)."
-            ),
-            deeplink=PROM_ALERTS_URL,
-        ),
     ]
+    if alert_observed:
+        evidence.append(
+            Evidence(
+                source=EvidenceSource.prometheus,
+                detail=(
+                    f"{brief.alert.alertname} is firing; alert activeAt "
+                    f"{correlation.alert_fired_at} is {correlation.delta_seconds:.0f}s "
+                    f"after the rollout at {correlation.rollout_at} "
+                    f"({'within' if correlated else 'outside'} the "
+                    f"{window_seconds}s correlation window)."
+                ),
+                deeplink=PROM_ALERTS_URL,
+            )
+        )
+    else:
+        evidence.append(
+            Evidence(
+                source=EvidenceSource.prometheus,
+                detail=(
+                    f"{brief.alert.alertname} is not firing yet (for: window or "
+                    f"scrape lag). Rollout at {correlation.rollout_at} still "
+                    f"correlates with live Kubernetes crash evidence"
+                    f"{' and ArgoCD health' if argo_bad else ''} "
+                    f"({correlation.delta_seconds:.0f}s symptom delta, "
+                    f"{'within' if correlated else 'outside'} {window_seconds}s window)."
+                ),
+                deeplink=PROM_ALERTS_URL,
+            )
+        )
     if brief.argocd is not None:
         evidence.extend(argocd_evidence_items(brief.argocd, service))
 
@@ -274,6 +366,8 @@ def analyze(
             observation=(
                 f"Value 1 for {service} — the kubelet is holding the container in "
                 f"CrashLoopBackOff."
+                if waiting == "CrashLoopBackOff"
+                else f"Waiting reason={waiting!r}; confirm via PromQL / kubectl."
             ),
             deeplink=PROM_GRAPH_URL,
         ),
@@ -311,8 +405,20 @@ def analyze(
         else f"No services depend on {service}; a rollback has no downstream blast radius.",
     )
 
+    # --- multi-signal confidence --------------------------------------------
+    agreeing: list[str] = []
+    if crash_signal:
+        agreeing.append("Kubernetes CrashLoop/OOM")
+    if mem_regressed:
+        agreeing.append(f"memory limit {current_mem}≠{healthy_mem}")
+    if alert_observed:
+        agreeing.append("Prometheus alert")
+    if argo_bad and argo is not None:
+        agreeing.append(f"ArgoCD {argo.health_status or argo.sync_status}")
+    signal_count = len(agreeing)
+
     # --- recommendation -----------------------------------------------------
-    if oom or waiting == "CrashLoopBackOff":
+    if crash_signal or (mem_regressed and argo_bad):
         if dependents:
             action = Action.forward_fix
             reasoning = (
@@ -334,13 +440,21 @@ def analyze(
             f"--reuse-values --set resources.limits.memory={healthy_mem}   "
             f"# or set it back in deploy/services/{service}.values.yaml and let ArgoCD sync"
         )
-        confidence_score = 0.9 if (correlated and oom) else 0.7
+        if signal_count >= 3 and correlated:
+            confidence_score = 0.95
+        elif signal_count >= 2 and (correlated or crash_signal):
+            confidence_score = 0.9 if (crash_signal and mem_regressed) else 0.8
+        else:
+            confidence_score = 0.7
         confidence_rationale = (
-            f"OOMKilled ({'confirmed' if oom else 'suspected'}) with exitCode 137 is "
-            f"an unambiguous memory-limit kill; the alert fired "
-            f"{correlation.delta_seconds:.0f}s after the rollout "
-            f"({'inside' if correlated else 'outside'} the correlation window); the "
-            f"only changed field is the memory limit."
+            f"{signal_count} independent signal(s) agree: {', '.join(agreeing) or 'none'}. "
+            f"Symptom time is {correlation.delta_seconds:.0f}s after rollout "
+            f"({'inside' if correlated else 'outside'} the {window_seconds}s window)"
+            + (
+                "; Prometheus alert observed."
+                if alert_observed
+                else "; Prometheus alert not yet observed — kube/Argo drove triage."
+            )
         )
     else:
         action = Action.investigate_more
@@ -350,13 +464,22 @@ def analyze(
         )
         remediation = f"kubectl -n {ns} describe deploy {service}"
         confidence_score = 0.3
-        confidence_rationale = "Crash signals absent; correlation inconclusive."
+        confidence_rationale = (
+            "Crash signals absent; multi-signal correlation inconclusive "
+            f"(saw: {', '.join(agreeing) or 'none'})."
+        )
 
     summary = (
         f"A chart bump lowered {service}'s memory limit to {current_mem} "
         f"(from {healthy_mem}), OOM-killing the container on startup and driving it "
         f"into CrashLoopBackOff ~{correlation.delta_seconds:.0f}s later."
     )
+    if not alert_observed:
+        summary += (
+            f" Investigation started from Kubernetes"
+            + (" and ArgoCD" if argo is not None else "")
+            + f" before `{brief.alert.alertname}` fired."
+        )
 
     return RCA(
         investigation_id=brief.investigation_id,

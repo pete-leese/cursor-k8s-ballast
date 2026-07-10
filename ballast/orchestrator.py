@@ -87,6 +87,7 @@ def run_investigation(
         )
         if alert.fired_at:
             brief.alert.fired_at = alert.fired_at
+        brief.alert.observed = alert.observed
         if alert.expr:
             brief.alert.expr = alert.expr
         if alert.severity:
@@ -181,7 +182,7 @@ def run_investigation(
                             ]
                         }
                     )
-                STORE.update(investigation_id, rca=rca)
+                STORE.update(investigation_id, rca=rca, error=None)
                 produced_rca = True
                 final_rca = rca
             elif event.type == "error":

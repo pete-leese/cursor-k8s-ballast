@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import threading
 import time
-import uuid
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -46,9 +45,7 @@ def _start(alertname: str, service: str, alert: AlertContext) -> str | None:
     if STORE.has_for_alert_episode(alertname, service, fired_at):
         existing = STORE.find_for_alert_episode(alertname, service, fired_at)
         return existing.id if existing else None
-    investigation_id = (
-        f"inv-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
-    )
+    investigation_id = STORE.allocate_incident_id()
     STORE.create(
         InvestigationRecord(
             id=investigation_id,
@@ -162,6 +159,8 @@ def trigger(body: TriggerBody):
             "ready": False,
             "cluster_healthy": pf.cluster_healthy,
             "alert_firing": pf.alert_firing,
+            "incident_detected": pf.incident_detected,
+            "signals": pf.signals,
             "blockers": pf.blockers,
             "hint": pf.hint,
             "existing_investigation_id": pf.existing_investigation_id,
@@ -170,6 +169,7 @@ def trigger(body: TriggerBody):
     ctx = AlertContext(
         alertname=body.alertname,
         fired_at=body.fired_at or pf.alert_fired_at or _now(),
+        observed=bool(pf.alert_firing or body.fired_at),
         severity="warning",
     )
     investigation_id = _start(body.alertname, body.service, ctx)
@@ -188,6 +188,12 @@ def list_investigations():
         }
         for r in STORE.list()
     ]
+
+
+@app.delete("/investigations")
+def clear_investigations():
+    cleared = STORE.clear_all()
+    return {"cleared": cleared}
 
 
 @app.get("/investigations/{investigation_id}")

@@ -284,6 +284,175 @@ BALLAST_CSS = """
     font-size: 1.05rem;
   }
 
+  .ballast-healthy {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    font-size: 1.05rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    color: #064e3b;
+    background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+    border: 1px solid #6ee7b7;
+    border-radius: 4px;
+    padding: 0.85rem 1.1rem;
+    margin: 0 0 1rem 0;
+    box-shadow: 0 1px 0 rgba(16, 185, 129, 0.12);
+  }
+  .ballast-healthy .material-symbols-outlined {
+    color: #10b981;
+    font-size: 1.75rem;
+    font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 24;
+    filter: drop-shadow(0 1px 1px rgba(5, 150, 105, 0.35));
+  }
+
+  .ballast-signals {
+    margin: 0 0 1rem 0;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #fff;
+  }
+  .ballast-signals-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.55rem 0.85rem;
+    background: #f8fafc;
+    border-bottom: 1px solid #e5e7eb;
+    font-size: 0.78rem;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: #64748b;
+  }
+  .ballast-signals-head .ballast-signals-svc {
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 600;
+    color: #0b1220;
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  .ballast-signal-row {
+    display: grid;
+    grid-template-columns: 1.6rem 7.5rem 1fr;
+    gap: 0.55rem;
+    align-items: start;
+    padding: 0.55rem 0.85rem;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 0.9rem;
+  }
+  .ballast-signal-row:last-child { border-bottom: none; }
+  .ballast-signal-row .material-symbols-outlined {
+    font-size: 1.15rem;
+    margin-top: 0.05rem;
+  }
+  .ballast-signal-ok .material-symbols-outlined { color: #10b981; }
+  .ballast-signal-bad .material-symbols-outlined { color: #ef4444; }
+  .ballast-signal-warn .material-symbols-outlined { color: #f59e0b; }
+  .ballast-signal-unk .material-symbols-outlined { color: #64748b; }
+  .ballast-signal-name {
+    font-weight: 600;
+    color: #0b1220;
+  }
+  .ballast-signal-detail {
+    color: #64748b;
+    line-height: 1.35;
+  }
+  .ballast-signal-detail code {
+    font-size: 0.82em;
+  }
+  .ballast-signals-note {
+    margin: -0.35rem 0 1rem 0;
+    font-size: 0.85rem;
+    color: #64748b;
+  }
+
+  .ballast-gauge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.15rem;
+  }
+  .ballast-gauge svg { overflow: visible; }
+  .ballast-gauge-value {
+    font-family: "IBM Plex Sans", ui-sans-serif, sans-serif;
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .ballast-gauge-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #64748b;
+    text-transform: uppercase;
+    margin-top: -0.35rem;
+  }
+
+  .ballast-verdict-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.5rem;
+  }
+  .ballast-verdict-when {
+    margin-left: auto;
+    font-size: 0.78rem;
+    color: #64748b;
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  .ballast-verdict-summary {
+    font-size: 1.12rem;
+    font-weight: 650;
+    line-height: 1.4;
+    letter-spacing: -0.01em;
+    color: #0b1220;
+    margin: 0 0 0.5rem 0;
+  }
+  .ballast-verdict-rationale {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.35rem;
+    font-size: 0.88rem;
+    line-height: 1.45;
+    color: #64748b;
+    margin: 0;
+  }
+  .ballast-verdict-rationale .material-symbols-outlined {
+    font-size: 1.05rem;
+    color: #0d9488;
+    margin-top: 0.1rem;
+  }
+
+  .ballast-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-top: 0.35rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #0f766e;
+  }
+  .ballast-live .material-symbols-outlined {
+    font-size: 0.95rem;
+    animation: ballast-spin 1.4s linear infinite;
+  }
+  .ballast-live-idle { color: #64748b; }
+  .ballast-live-idle .material-symbols-outlined {
+    color: #10b981;
+    animation: none;
+  }
+  .ballast-live-off { color: #6b7280; }
+  .ballast-live-off .material-symbols-outlined { animation: none; }
+  @keyframes ballast-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .ballast-live .material-symbols-outlined { animation: none; }
+  }
+
   [data-testid="stMetric"] {
     background: transparent;
     border: none;
@@ -392,7 +561,7 @@ def mdi(name: str, *, filled: bool = False, size: int | None = None, cls: str = 
     return f'<span class="{" ".join(classes)}"{style} aria-hidden="true">{name}</span>'
 
 
-def brand_block(subtitle: str = "Kubernetes · GitOps incident response") -> str:
+def brand_block(subtitle: str = "GitOps incident response") -> str:
     """Sidebar product mark: logo image + wordmark."""
     if LOGO_SVG.exists():
         svg = LOGO_SVG.read_text(encoding="utf-8")

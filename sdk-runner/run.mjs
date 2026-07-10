@@ -98,25 +98,49 @@ try {
   }
 
   let raw = assistantText;
+  let resultObj = null;
   if (runtime === "cloud") {
     try {
-      const result = await (
+      const finished = await (
         await Agent.getRun(run.id, { runtime: "cloud", agentId: run.agentId })
       ).wait();
-      if (typeof result?.result === "string") raw = result.result;
+      resultObj = finished;
+      if (typeof finished?.result === "string" && finished.result.trim()) {
+        raw = finished.result;
+      } else if (finished?.result && typeof finished.result === "object") {
+        emit({ type: "rca", data: finished.result });
+        process.exit(0);
+      }
     } catch {
       /* fall back to streamed assistant text */
     }
   }
 
-  const a = raw.indexOf("{");
-  const b = raw.lastIndexOf("}");
-  const jsonStr = a >= 0 && b > a ? raw.slice(a, b + 1) : raw;
-  let data;
-  try {
-    data = JSON.parse(jsonStr);
-  } catch (e) {
-    emit({ type: "error", text: `could not parse RCA JSON from result: ${e}` });
+  function extractJson(text) {
+    if (!text || typeof text !== "string") return null;
+    const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = fence ? fence[1].trim() : text.trim();
+    const a = candidate.indexOf("{");
+    const b = candidate.lastIndexOf("}");
+    if (a < 0 || b <= a) return null;
+    try {
+      return JSON.parse(candidate.slice(a, b + 1));
+    } catch {
+      return null;
+    }
+  }
+
+  const data = extractJson(raw);
+  if (!data) {
+    const preview = String(raw || "")
+      .replace(/\s+/g, " ")
+      .slice(0, 280);
+    emit({
+      type: "error",
+      text: preview
+        ? `could not parse RCA JSON from Cursor result (got: ${preview})`
+        : "could not parse RCA JSON from Cursor result (empty result)",
+    });
     process.exit(1);
   }
   emit({ type: "rca", data });

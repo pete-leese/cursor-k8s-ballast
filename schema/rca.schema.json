@@ -200,7 +200,7 @@
       "type": "object"
     },
     "RolloutCorrelation": {
-      "description": "The core triage signal: the rollout that shipped the change vs the alert.\n\n``delta_seconds`` is ``alert_fired_at - rollout_at``; a small positive delta\nis the fingerprint of \"this rollout caused this alert\". ``correlated`` is the\nengine's boolean call given the configured window.",
+      "description": "Rollout vs primary symptom time (alert, or kube/Argo anchor if no alert).\n\n``delta_seconds`` is ``alert_fired_at - rollout_at``. A small positive delta\nfingerprints \"this rollout caused the incident\". ``alert_fired_at`` may be the\nPrometheus ``activeAt`` or a symptom anchor (ArgoCD sync / investigation time)\nwhen the alert is not yet observed. ``correlated`` is the engine's boolean\ncall given the configured window.",
       "properties": {
         "rollout_at": {
           "title": "Rollout At",
@@ -311,6 +311,7 @@
         "rollout",
         "chart_bump",
         "crashloop",
+        "argocd",
         "note"
       ],
       "title": "TimelineKind",
