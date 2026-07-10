@@ -134,6 +134,24 @@ BALLAST_CSS = """
     background: #f3f4f6;
   }
 
+  /* Hide Streamlit's default "Deploy" button in the top toolbar */
+  [data-testid="stAppDeployButton"] { display: none !important; }
+
+  /* Hide Streamlit's "Running…" status widget — its per-tick repaint from the
+     live-poll fragments causes a flash; we surface polling via .ballast-live. */
+  [data-testid="stStatusWidget"] { display: none !important; }
+
+  /* Kill the poll-tick "flash": Streamlit fades element containers to a low
+     "stale" opacity during every rerun; the live-poll fragment triggers this
+     each tick. Pin stale elements to full opacity so nothing pulses. Hooks the
+     stable data-stale attr / stElementContainer testid, not volatile Emotion
+     hashes. */
+  [data-stale="true"],
+  [data-testid="stElementContainer"][data-stale="true"] {
+    opacity: 1 !important;
+    transition: none !important;
+  }
+
   .ballast-masthead {
     display: flex;
     flex-wrap: wrap;
@@ -261,15 +279,51 @@ BALLAST_CSS = """
     font-size: 1.05rem;
     font-weight: 700;
     color: #0b1220;
-    margin: 0.4rem 0 0.7rem 0;
+    margin: 1.1rem 0 0.6rem 0;
     letter-spacing: -0.01em;
     display: flex;
-    align-items: center;
-    gap: 0.4rem;
+    align-items: baseline;
+    gap: 0.45rem;
   }
   .ballast-section-head .material-symbols-outlined {
     color: #0f766e;
     font-size: 1.25rem;
+    align-self: center;
+  }
+  .ballast-section-sub {
+    font-weight: 500;
+    font-size: 0.82rem;
+    color: #6b7280;
+    letter-spacing: 0;
+  }
+  .ballast-section-sub code {
+    font-size: 0.92em;
+    color: #334155;
+  }
+  /* Namespace label under the "Monitored namespaces" heading — a subtle
+     caption + pill, so the value sits on its own line, not inline in the h. */
+  .ballast-ns-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: -0.35rem 0 0.75rem 0;
+  }
+  .ballast-ns-label-caption {
+    font-size: 0.72rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #64748b;
+  }
+  .ballast-ns-label-value {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: #334155;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 3px;
+    padding: 1px 8px;
   }
   .ballast-pane-title {
     font-size: 0.78rem;
@@ -306,67 +360,77 @@ BALLAST_CSS = """
     filter: drop-shadow(0 1px 1px rgba(5, 150, 105, 0.35));
   }
 
-  .ballast-signals {
-    margin: 0 0 1rem 0;
-    border: 1px solid #e5e7eb;
-    border-radius: 4px;
-    overflow: hidden;
-    background: #fff;
-  }
-  .ballast-signals-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.55rem 0.85rem;
-    background: #f8fafc;
-    border-bottom: 1px solid #e5e7eb;
-    font-size: 0.78rem;
-    font-weight: 650;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
+  .ballast-signals-note {
+    margin: 0.1rem 0 1rem 0;
+    font-size: 0.85rem;
     color: #64748b;
   }
-  .ballast-signals-head .ballast-signals-svc {
-    text-transform: none;
-    letter-spacing: 0;
-    font-weight: 600;
+
+  /* Per-service overview rows + inline firing-signal chips */
+  .ballast-svc-list {
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    background: #fff;
+    margin: 0 0 1rem 0;
+    overflow: hidden;
+  }
+  .ballast-svc-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem 0.7rem;
+    padding: 0.65rem 0.9rem;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 0.86rem;
+    line-height: 1.4;
+    color: #1f2937;
+  }
+  .ballast-svc-row:last-child { border-bottom: none; }
+  /* Status badge — fixed slot so service names line up row-to-row */
+  .ballast-svc-row > span:first-child {
+    min-width: 4.75rem;
+    text-align: center;
+  }
+  .ballast-svc-name {
+    min-width: 5.5rem;
+    font-weight: 700;
     color: #0b1220;
     font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
   }
-  .ballast-signal-row {
-    display: grid;
-    grid-template-columns: 1.6rem 7.5rem 1fr;
-    gap: 0.55rem;
-    align-items: start;
-    padding: 0.55rem 0.85rem;
-    border-bottom: 1px solid #f1f5f9;
-    font-size: 0.9rem;
+  .ballast-svc-meta { color: #6b7280; font-size: 0.8rem; }
+  .ballast-svc-meta code { font-size: 0.82em; color: #334155; }
+  .ballast-svc-signals {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    margin-left: auto;
+    padding-left: 0.4rem;
   }
-  .ballast-signal-row:last-child { border-bottom: none; }
-  .ballast-signal-row .material-symbols-outlined {
-    font-size: 1.15rem;
-    margin-top: 0.05rem;
-  }
-  .ballast-signal-ok .material-symbols-outlined { color: #10b981; }
-  .ballast-signal-bad .material-symbols-outlined { color: #ef4444; }
-  .ballast-signal-warn .material-symbols-outlined { color: #f59e0b; }
-  .ballast-signal-unk .material-symbols-outlined { color: #64748b; }
-  .ballast-signal-name {
+  .ballast-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 2px 7px;
+    border-radius: 2px;
+    font-size: 0.7rem;
     font-weight: 600;
-    color: #0b1220;
+    white-space: nowrap;
+    border: 1px solid;
   }
-  .ballast-signal-detail {
-    color: #64748b;
-    line-height: 1.35;
+  .ballast-chip .material-symbols-outlined {
+    font-size: 0.9rem;
+    font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 20;
   }
-  .ballast-signal-detail code {
-    font-size: 0.82em;
+  .ballast-chip--bad {
+    color: #be123c;
+    background: rgba(190, 18, 60, 0.08);
+    border-color: rgba(190, 18, 60, 0.28);
   }
-  .ballast-signals-note {
-    margin: -0.35rem 0 1rem 0;
-    font-size: 0.85rem;
-    color: #64748b;
+  .ballast-chip--warn {
+    color: #b45309;
+    background: rgba(180, 83, 9, 0.08);
+    border-color: rgba(180, 83, 9, 0.28);
   }
 
   .ballast-gauge {

@@ -15,6 +15,7 @@ from datetime import datetime
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 from theme import (
     LOGO_PNG,
@@ -32,6 +33,8 @@ from theme import (
 API = os.environ.get("BALLAST_API_URL", "http://localhost:8000")
 RUNNING = {"queued", "triaging", "investigating"}
 SIDEBAR_INVESTIGATION_LIMIT = 12
+# Known-good memory limit — mirrors BALLAST_HEALTHY_MEMORY in ballast/preflight.py.
+HEALTHY_MEMORY = os.environ.get("BALLAST_HEALTHY_MEMORY", "128Mi")
 # Cap background reconcile ticks (issue filed, PR not yet visible) at ~60s.
 _RECONCILE_TICK_CAP = 20
 
@@ -92,6 +95,48 @@ st.set_page_config(
     page_icon=_PAGE_ICON,
 )
 inject_styles()
+
+
+def disable_streamlit_hotkeys() -> None:
+    """Suppress Streamlit's built-in "c" = clear-cache dev shortcut.
+
+    Streamlit binds its dev hotkeys via a ``keydown`` listener on the top-level
+    ``document``. This console runs inside the top window, but a component iframe
+    can reach the parent document through ``window.parent``. We attach a single
+    capturing listener there that swallows a plain (or Ctrl/Cmd-held) "c" before
+    Streamlit sees it — while leaving Ctrl/Cmd+C copy and typing in fields alone.
+    """
+    components.html(
+        """
+        <script>
+        (function () {
+          try {
+            var parent = window.parent;
+            if (!parent || parent.__ballastHotkeysDisabled) return;
+            parent.__ballastHotkeysDisabled = true;
+            parent.document.addEventListener('keydown', function (e) {
+              var key = (e.key || '').toLowerCase();
+              if (key !== 'c') return;
+              var t = e.target;
+              if (t && t.closest &&
+                  t.closest('input, textarea, [contenteditable], [contenteditable=""], [contenteditable="true"]')) {
+                return;
+              }
+              // Stop Streamlit's clear-cache handler. Do NOT preventDefault when
+              // a modifier is held, so Ctrl+C / Cmd+C copy still works.
+              e.stopImmediatePropagation();
+            }, true);
+          } catch (err) {
+            /* cross-origin or no parent access — fail silently */
+          }
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
+disable_streamlit_hotkeys()
 
 
 def badge(text: str, color: str) -> str:
@@ -368,10 +413,10 @@ def live_refresh_indicator(investigation_id: str) -> None:
     old_sig = st.session_state.get(key)
 
     # Material change since the last full render → refresh the whole app once.
+    # The "verdict landed" toast is decided in the main render from the
+    # _verdict_watching/_verdict_seen flags (which survive baseline reseeding),
+    # so here we only trigger the refresh.
     if old_sig is not None and new_sig != old_sig:
-        # Verdict just landed (rca went absent -> present): notify.
-        if not old_sig[1] and new_sig[1]:
-            st.session_state["_verdict_toast_id"] = investigation_id
         st.session_state[key] = new_sig
         st.session_state.pop(tick_key, None)
         st.rerun(scope="app")
@@ -397,6 +442,57 @@ def live_refresh_indicator(investigation_id: str) -> None:
             f'{mdi("check_circle", filled=True)} up to date</div>',
             unsafe_allow_html=True,
         )
+
+
+def verdict_complete_toast(vid: str) -> None:
+    """Once-only 'analysis complete' toast with a link to that run's Verdict.
+
+    The link is a relative query-param URL (``?view=<id>``). On load the
+    sidebar reads ``st.query_params['view']`` and selects that investigation
+    before the radio widget is built; because the Verdict tab is first whenever
+    an rca exists, selecting the run lands on the verdict — no tab switch
+    needed. ``st.toast`` renders markdown, so the link is clickable.
+    """
+    st.toast(
+        f"Analysis complete — {vid}. [Open verdict →](?view={vid})",
+        icon=":material/gavel:",
+    )
+
+
+@st.fragment(run_every=4.0)
+def verdict_completion_watcher() -> None:
+    """View-independent poll that announces a completed analysis anywhere.
+
+    The in-view toast (main render) only fires while the operator is watching
+    that specific investigation. This fragment covers the rest: it runs on
+    every view (cluster overview or a different run) and toasts once when a run
+    it observed *running this session* leaves the running state with a verdict.
+
+    Kept lightweight and consistent with ``live_refresh_indicator``: one
+    investigations-list request per tick (a fragment-local repaint, never a
+    full-page rerun), plus a single detail fetch only at the moment a watched
+    run transitions out of the running state. Deduplicates against the in-view
+    toast through the shared ``_verdict_seen_<id>`` flag, so exactly one toast
+    fires per completed run regardless of which view is active. Pre-existing
+    completed runs never toast: the ``_verdict_watching_<id>`` gate only trips
+    for runs seen running during this session.
+    """
+    if not st.session_state.get("auto_refresh", True):
+        return
+    for rec in api_get("/investigations", quiet=True) or []:
+        vid = rec.get("id")
+        if not vid or st.session_state.get(f"_verdict_seen_{vid}"):
+            continue
+        watch_key = f"_verdict_watching_{vid}"
+        if rec.get("status") in RUNNING:
+            st.session_state[watch_key] = True
+        elif st.session_state.get(watch_key):
+            # Left the running state after we watched it run — confirm the
+            # verdict landed (the list omits rca), then toast exactly once.
+            detail = api_get(f"/investigations/{vid}", quiet=True) or {}
+            if detail.get("rca"):
+                verdict_complete_toast(vid)
+            st.session_state[f"_verdict_seen_{vid}"] = True
 
 
 def render_service_stat_cards(
@@ -463,98 +559,126 @@ def render_service_stat_cards(
     )
 
 
-def render_signal_checklist(
-    primary: str,
-    signals: dict,
-    *,
-    alertname: str = "StreamIngestCrashLooping",
-) -> None:
-    """Checklist of Prometheus / Kubernetes / ArgoCD triggers for the primary service."""
-    prom = signals.get("prometheus") or {}
-    kube = signals.get("kubernetes") or {}
-    argo = signals.get("argocd") or {}
+# ── Per-service signal derivation ──────────────────────────────────────────
+# Mirror the deterministic incident rules from ballast/preflight.py so each
+# service in the overview shows a signal chip ONLY when that signal is firing.
 
-    def code(text: str) -> str:
-        return f"<code>{html_lib.escape(str(text))}</code>"
+_SIGNAL_CHIP_ICON = {"bad": "cancel", "warn": "schedule"}
 
-    rows: list[tuple[str, str, str]] = []
 
-    prom_state = prom.get("state")
-    if prom.get("error") or prom_state == "error":
-        rows.append(("unk", "Prometheus", f"unreachable — {html_lib.escape(str(prom.get('error')))}"))
-    elif prom.get("firing") or prom_state == "firing":
-        fired = prom.get("fired_at")
-        when = f" since {code(fired)}" if fired else ""
-        rows.append(("bad", "Prometheus", f"{code(alertname)} firing{when}"))
-    elif prom_state == "pending":
-        fired = prom.get("fired_at")
-        when = f" since {code(fired)}" if fired else ""
-        rows.append(
-            ("warn", "Prometheus", f"{code(alertname)} pending — in <code>for:</code> window{when}")
-        )
-    else:
-        rows.append(("ok", "Prometheus", f"{code(alertname)} quiet"))
+def _mem_below_healthy(mem: str | None) -> bool:
+    """True when a service's memory limit is below the known-good value."""
+    if not mem:
+        return False
+    try:
+        cur = int("".join(ch for ch in str(mem) if ch.isdigit()) or "0")
+        good = int("".join(ch for ch in HEALTHY_MEMORY if ch.isdigit()) or "0")
+        return bool(cur and good and cur < good)
+    except ValueError:
+        return False
 
-    if kube.get("error"):
-        rows.append(("unk", "Kubernetes", f"unreachable — {html_lib.escape(str(kube['error']))}"))
-    elif kube.get("incident"):
-        reasons = kube.get("reasons") or []
-        detail = html_lib.escape("; ".join(reasons) if reasons else "unhealthy pods")
-        rows.append(("bad", "Kubernetes", detail))
-    else:
-        pod = kube.get("pod_state") or "—"
-        ready = kube.get("ready_pods")
-        total = kube.get("total_pods")
-        mem = kube.get("memory_limit")
-        bits = [f"pods {code(pod)}"]
-        if ready is not None and total is not None:
-            bits.append(f"{ready}/{total} ready")
-        if mem:
-            bits.append(f"mem {code(mem)}")
-        rows.append(("ok", "Kubernetes", " · ".join(bits) if bits else "healthy"))
 
-    if argo.get("error"):
-        rows.append(("unk", "ArgoCD", f"unreachable — {html_lib.escape(str(argo['error']))}"))
-    elif argo.get("note") and not argo.get("sync_status"):
-        rows.append(("unk", "ArgoCD", html_lib.escape(str(argo["note"]))))
-    elif argo.get("incident"):
-        reasons = argo.get("reasons") or []
-        sync = argo.get("sync_status") or "—"
-        health = argo.get("health_status") or "—"
-        detail = html_lib.escape("; ".join(reasons) if reasons else "unhealthy")
-        detail += f" ({code(sync)} / {code(health)})"
-        rows.append(("bad", "ArgoCD", detail))
-    else:
-        sync = argo.get("sync_status") or "—"
-        health = argo.get("health_status") or "—"
-        rows.append(("ok", "ArgoCD", f"sync {code(sync)} · health {code(health)}"))
-
-    icon = {
-        "ok": mdi("check_circle", filled=True),
-        "bad": mdi("cancel", filled=True),
-        "warn": mdi("schedule", filled=True),
-        "unk": mdi("help", filled=True),
-    }
-    body = []
-    for state, name, detail in rows:
-        body.append(
-            f'<div class="ballast-signal-row ballast-signal-{state}">'
-            f"{icon[state]}"
-            f'<span class="ballast-signal-name">{html_lib.escape(name)}</span>'
-            f'<span class="ballast-signal-detail">{detail}</span>'
-            f"</div>"
-        )
-
-    st.markdown(
-        f'<div class="ballast-signals">'
-        f'<div class="ballast-signals-head">'
-        f"<span>Signal checks</span>"
-        f'<span class="ballast-signals-svc">{html_lib.escape(primary)}</span>'
-        f"</div>"
-        f"{''.join(body)}"
-        f"</div>",
-        unsafe_allow_html=True,
+def _kube_signal_reasons(row: dict) -> list[str]:
+    """Kubernetes incident reasons for a service (empty when pods are healthy)."""
+    if row.get("healthy", False):
+        return []
+    crash = row.get("crash_state") or {}
+    pod = str(row.get("pod_state") or crash.get("display_state") or "unhealthy")
+    pod_l = pod.lower()
+    waiting = crash.get("waiting_reason")
+    oom = (
+        crash.get("last_terminated_reason") == "OOMKilled"
+        or crash.get("exit_code") == 137
     )
+    restarts = int(row.get("restarts") or crash.get("restarts") or 0)
+    ready = row.get("ready_pods")
+    total = row.get("total_pods")
+    reasons: list[str] = []
+    if waiting == "CrashLoopBackOff" or "crashloop" in pod_l:
+        reasons.append(f"CrashLoopBackOff · {restarts} restarts")
+    if oom or "oom" in pod_l:
+        reasons.append("OOMKilled")
+    if total == 0:
+        reasons.append("no pods (Missing)")
+    elif total and (ready or 0) < total:
+        reasons.append(f"not ready {ready}/{total}")
+    mem = row.get("memory_limit")
+    if mem and _mem_below_healthy(mem):
+        reasons.append(f"mem {mem} < {HEALTHY_MEMORY}")
+    if not reasons:
+        reasons.append(pod)
+    return reasons
+
+
+def _argo_signal_reasons(row: dict) -> list[str]:
+    """ArgoCD incident reasons for a service (empty when synced + healthy)."""
+    sync = row.get("argocd_sync")
+    health = row.get("argocd_health")
+    reasons: list[str] = []
+    if health in ("Degraded", "Missing", "Suspended"):
+        reasons.append(f"health {health}")
+    if sync == "OutOfSync":
+        reasons.append("OutOfSync")
+    return reasons
+
+
+def _prom_signal(svc: str, overview: dict, primary: str) -> tuple[str | None, str]:
+    """(state, detail) for a service's Prometheus signal — bad/warn/None.
+
+    The primary carries the authoritative firing/pending state (with the
+    ``for:`` window) in ``signals.prometheus``; every service can also be
+    matched against the demo/stream ``firing_alerts`` list.
+    """
+    if svc == primary:
+        prom = (overview.get("signals") or {}).get("prometheus") or {}
+        state = prom.get("state")
+        alertname = prom.get("alertname", "alert")
+        if prom.get("firing") or state == "firing":
+            fired = prom.get("fired_at")
+            detail = f"{alertname} firing" + (f" since {fired}" if fired else "")
+            return "bad", detail
+        if state == "pending":
+            return "warn", f"{alertname} pending — in for: window"
+    matched = [
+        a for a in (overview.get("firing_alerts") or []) if a.get("service") == svc
+    ]
+    if matched:
+        names = ", ".join(
+            sorted({a.get("alertname") for a in matched if a.get("alertname")})
+        )
+        return "bad", (f"{names} firing" if names else "alert firing")
+    return None, ""
+
+
+def _signal_chip(state: str, source: str, detail: str) -> str:
+    icon = mdi(_SIGNAL_CHIP_ICON.get(state, "help"), filled=True)
+    title = html_lib.escape(detail or source)
+    return (
+        f'<span class="ballast-chip ballast-chip--{state}" title="{title}">'
+        f"{icon}{html_lib.escape(source)}</span>"
+    )
+
+
+def service_signal_chips(row: dict, overview: dict, primary: str) -> str:
+    """Compact chips for signals currently FIRING on a service (empty if quiet)."""
+    svc = row.get("service", "?")
+    chips: list[str] = []
+
+    prom_state, prom_detail = _prom_signal(svc, overview, primary)
+    if prom_state:
+        chips.append(_signal_chip(prom_state, "Prometheus", prom_detail))
+
+    kube_reasons = _kube_signal_reasons(row)
+    if kube_reasons:
+        chips.append(_signal_chip("bad", "Kubernetes", "; ".join(kube_reasons)))
+
+    argo_reasons = _argo_signal_reasons(row)
+    if argo_reasons:
+        chips.append(_signal_chip("bad", "ArgoCD", "; ".join(argo_reasons)))
+
+    if not chips:
+        return ""
+    return f'<span class="ballast-svc-signals">{"".join(chips)}</span>'
 
 
 def render_cluster_overview(overview: dict) -> None:
@@ -564,20 +688,19 @@ def render_cluster_overview(overview: dict) -> None:
     healthy = overview.get("healthy", False)
     ballast_firing = overview.get("ballast_alert_firing", False)
     incident = overview.get("incident_detected") or pf.get("incident_detected", False)
-    signals = overview.get("signals") or pf.get("signals") or {}
-    alertname = pf.get("alertname") or "StreamIngestCrashLooping"
 
     if healthy:
         st.markdown(
             f'<div class="ballast-healthy">'
-            f'{mdi("check_circle", filled=True)} Fleet healthy — no active incidents'
+            f'{mdi("check_circle", filled=True)} All healthy — no active incidents'
             f"</div>",
             unsafe_allow_html=True,
         )
 
-    render_signal_checklist(primary, signals, alertname=alertname)
-
     if not healthy:
+        # During an incident, guide the operator to the next action. The
+        # per-service rows below carry the firing-signal chips inline, so no
+        # standalone checklist is needed here.
         existing = pf.get("existing_investigation_id")
         if pf.get("investigation_active") and existing:
             st.markdown(
@@ -632,14 +755,16 @@ def render_cluster_overview(overview: dict) -> None:
         firing_count=overview.get("firing_alert_count", 0),
     )
 
+    demo_ns = overview.get("demo_namespace") or overview.get("namespace", "demo")
     st.markdown(
-        f'<p class="ballast-section-head">{mdi("hub")} Services · namespace '
-        f'`{overview.get("demo_namespace") or overview.get("namespace", "demo")}`'
-        f' <span style="font-weight:500;color:#6b7280;font-size:0.85rem">'
-        f'(Ballast product ns: '
-        f'`{overview.get("product_namespace", "ballast")}`)</span></p>',
+        f'<p class="ballast-section-head">{mdi("hub")} Monitored namespaces</p>'
+        f'<span class="ballast-ns-label">'
+        f'<span class="ballast-ns-label-caption">namespace</span>'
+        f'<code class="ballast-ns-label-value">{html_lib.escape(str(demo_ns))}</code>'
+        f"</span>",
         unsafe_allow_html=True,
     )
+    svc_rows: list[str] = []
     for row in overview.get("services", []):
         svc = row.get("service", "?")
         ok = row.get("healthy", False)
@@ -649,11 +774,25 @@ def render_cluster_overview(overview: dict) -> None:
         health = row.get("argocd_health") or "—"
         mem = row.get("memory_limit") or "—"
         ready = f"{row.get('ready_pods', 0)}/{row.get('total_pods', 0)}"
-        st.markdown(
-            f"{badge_inline('ok' if ok else 'degraded', color)} **{svc}** · pods `{pod}` ({ready}) · "
-            f"mem `{mem}` · ArgoCD `{sync}` / `{health}`",
-            unsafe_allow_html=True,
+        chips = service_signal_chips(row, overview, primary)
+        meta = (
+            f"pods <code>{html_lib.escape(str(pod))}</code> ({ready}) · "
+            f"mem <code>{html_lib.escape(str(mem))}</code> · "
+            f"ArgoCD <code>{html_lib.escape(str(sync))}</code>"
+            f" / <code>{html_lib.escape(str(health))}</code>"
         )
+        svc_rows.append(
+            f'<div class="ballast-svc-row">'
+            f'{badge_inline("ok" if ok else "degraded", color)}'
+            f'<span class="ballast-svc-name">{html_lib.escape(str(svc))}</span>'
+            f'<span class="ballast-svc-meta">{meta}</span>'
+            f"{chips}"
+            f"</div>"
+        )
+    st.markdown(
+        f'<div class="ballast-svc-list">{"".join(svc_rows)}</div>',
+        unsafe_allow_html=True,
+    )
 
     prom_error = overview.get("prometheus_error")
     if prom_error:
@@ -699,6 +838,80 @@ def render_cluster_overview(overview: dict) -> None:
                 st.markdown(
                     f"`{fmt_dt(h.get('deployed_at'))}` — rev `{short_rev(h.get('revision'), 12)}`"
                 )
+
+
+def _overview_signature(overview: dict) -> tuple:
+    """Out-of-fragment identity of the cluster state.
+
+    Only fields the *sidebar* depends on live here — a change means the
+    investigation list / Investigate target must update, so the fragment
+    escalates to a full-app rerun. Health / signal / alert churn is repainted
+    inside the fragment and deliberately excluded so it never pulses the page.
+    """
+    pf = overview.get("preflight") or {}
+    return (
+        overview.get("primary_service"),
+        overview.get("existing_investigation_id") or pf.get("existing_investigation_id"),
+        bool(pf.get("investigation_active")),
+    )
+
+
+@st.fragment(run_every=5.0)
+def render_cluster_overview_live() -> None:
+    """Poll ``/cluster/overview`` in place and repaint the overview panel.
+
+    Mirrors ``live_refresh_indicator``: the fragment re-runs server-side every
+    tick and patches only this subtree over the websocket — no full-page reload
+    / pulse. Gated by the ``auto_refresh`` sidebar checkbox (read from session
+    state, never re-created here). When paused, it stops fetching and repaints
+    the last-known overview with a "paused" indicator. A manual refresh button
+    forces an immediate re-fetch even while paused. It only escalates to a full
+    ``st.rerun(scope="app")`` when the sidebar-relevant identity changes (a new
+    investigation appeared / primary service changed).
+    """
+    live = bool(st.session_state.get("auto_refresh", True))
+
+    ind_col, btn_col = st.columns([4, 1], vertical_alignment="center")
+    with btn_col:
+        forced = st.button(
+            "Refresh",
+            key="overview_refresh_now",
+            type="secondary",
+            use_container_width=True,
+            help="Fetch the cluster overview immediately.",
+        )
+
+    if live or forced:
+        fresh = api_get("/cluster/overview", quiet=True)
+        if fresh:
+            st.session_state["_overview_cache"] = fresh
+
+    overview_now = st.session_state.get("_overview_cache") or {}
+
+    with ind_col:
+        if live:
+            st.markdown(
+                f'<div class="ballast-live">{mdi("sync")} live · watching cluster</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="ballast-live ballast-live-off">'
+                f'{mdi("pause_circle")} live paused</div>',
+                unsafe_allow_html=True,
+            )
+
+    # Escalate to a full-app rerun only when out-of-fragment UI (the sidebar)
+    # must change. Everything else is repainted in place below — no pulse.
+    if live:
+        sig = _overview_signature(overview_now)
+        old_sig = st.session_state.get("_overview_sig")
+        st.session_state["_overview_sig"] = sig
+        if old_sig is not None and sig != old_sig:
+            st.rerun(scope="app")
+            return
+
+    render_cluster_overview(overview_now)
 
 
 def coalesce_feed_events(events: list[dict]) -> list[dict]:
@@ -1243,6 +1456,17 @@ with st.sidebar:
         options[rec["id"]] = rec
 
     ids = [CLUSTER_VIEW] + [rec["id"] for rec in investigations]
+    # Query-param navigation: a toast link (`?view=INC-0017`) jumps to that
+    # run's Verdict. Apply the selection BEFORE the radio widget is created —
+    # a widget-bound session key can't be mutated afterwards (same constraint
+    # as `_reset_selection`) — then clear the param so it doesn't re-fire on
+    # later reruns. Unknown/stale ids are ignored but still cleared.
+    requested_view = st.query_params.get("view")
+    if requested_view is not None:
+        if requested_view in ids:
+            st.session_state.pop("all_good", None)
+            st.session_state["selected"] = requested_view
+        st.query_params.clear()
     if st.session_state.pop("_reset_selection", False):
         st.session_state["selected"] = CLUSTER_VIEW
     if "selected" not in st.session_state or st.session_state["selected"] not in ids:
@@ -1309,6 +1533,11 @@ record = api_get(f"/investigations/{selected}") if selected and not cluster_mode
 argocd_live = api_get(f"/argocd/applications/{record['service']}", quiet=True) if record else None
 kube_live = api_get(f"/kubernetes/services/{record['service']}", quiet=True) if record else None
 
+# View-independent completion watcher — fires the "analysis complete" toast
+# even when the operator is on the cluster overview or a different run. Renders
+# nothing itself; it only shows toasts (deduped via `_verdict_seen_<id>`).
+verdict_completion_watcher()
+
 # ── Main workspace ──────────────────────────────────────────────────────────
 
 STAGE_ICONS = {"Overview": "dns", "Investigation": "troubleshoot"}
@@ -1320,16 +1549,19 @@ if cluster_mode:
         icon="dns",
     )
     stage_pills("Overview", ["Overview", "Investigation"], icons=STAGE_ICONS)
-    if st.button("Refresh overview", type="secondary"):
-        st.rerun()
     if st.session_state.pop("all_good", False):
         st.markdown(
             f'<div class="ballast-healthy">'
-            f'{mdi("check_circle", filled=True)} Fleet healthy — no active incidents'
+            f'{mdi("check_circle", filled=True)} All healthy — no active incidents'
             f"</div>",
             unsafe_allow_html=True,
         )
-    render_cluster_overview(overview)
+    # Seed the live fragment's baseline from this full render's fetch so its
+    # first tick has data (even while paused) and doesn't immediately escalate
+    # to a full-app rerun. The panel itself then live-updates in place.
+    st.session_state["_overview_cache"] = overview
+    st.session_state["_overview_sig"] = _overview_signature(overview)
+    render_cluster_overview_live()
 elif not record:
     st.info("Select **Cluster overview** in the sidebar or click **Investigate**.")
 else:
@@ -1354,10 +1586,23 @@ else:
         st.badge(record["status"], color=streamlit_badge_color(record["status"]))
         live_refresh_indicator(record["id"])
 
-    # Toast once when the Verdict lands (rca transitioned absent -> present).
-    if st.session_state.get("_verdict_toast_id") == record["id"] and rca:
-        st.toast(f"Verdict ready for {record['id']}", icon=":material/gavel:")
-        st.session_state.pop("_verdict_toast_id", None)
+    # Toast once when the Verdict lands while the user is watching. Tracked via
+    # dedicated session flags rather than inferred from the live-refresh
+    # baseline: that baseline is reseeded on every full render (line above), so
+    # any unrelated rerun after the RCA lands would clobber the absent->present
+    # signal and swallow the toast. `_verdict_watching_<id>` records that we saw
+    # this investigation pre-verdict (so a later RCA is a "landed while
+    # watching" event); `_verdict_seen_<id>` guarantees the toast fires at most
+    # once and never for investigations already complete on first open.
+    vid = record["id"]
+    seen_key = f"_verdict_seen_{vid}"
+    watch_key = f"_verdict_watching_{vid}"
+    if not rca:
+        st.session_state[watch_key] = True
+    elif not st.session_state.get(seen_key):
+        if st.session_state.get(watch_key):
+            verdict_complete_toast(vid)
+        st.session_state[seen_key] = True
 
     render_service_stat_cards(
         record["service"],
@@ -1447,6 +1692,7 @@ else:
         else:
             render_rca_panel(record, rca)
 
-# Live updates while investigating are handled in place by
-# `live_refresh_indicator` (a fragment) — no full-page rerun / pulse here.
-# Cluster overview stays static and is refreshed via the manual button.
+# Live updates are handled in place by fragments — no full-page rerun / pulse
+# here. Investigations use `live_refresh_indicator`; the cluster overview uses
+# `render_cluster_overview_live`, which re-fetches and repaints its own panel
+# every ~5s (gated by `auto_refresh`) with a manual immediate-refresh override.
