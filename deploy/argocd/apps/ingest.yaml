@@ -14,10 +14,10 @@ spec:
     namespace: demo
   sources:
     - repoURL: https://github.com/pete-leese/cursor-k8s-ballast
-      targetRevision: incident/break/payments-20260709-223905
+      targetRevision: main
       ref: values
     - repoURL: https://github.com/pete-leese/cursor-k8s-ballast
-      targetRevision: incident/break/payments-20260709-223905
+      targetRevision: main
       path: charts/ballast-service
       helm:
         releaseName: ingest
