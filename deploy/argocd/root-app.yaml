@@ -11,7 +11,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/pete-leese/cursor-k8s-ballast
-    targetRevision: main
+    targetRevision: incident/break/payments-20260709-223905
     path: deploy/argocd/apps
     directory:
       recurse: true
