@@ -27,7 +27,7 @@ trap 'kill $API_PID 2>/dev/null || true' EXIT
 
 sleep 2
 echo "==> Ballast console on http://localhost:8501"
-echo "    Induce incident: task break  (alert auto-starts investigation if BALLAST_ALERT_WATCH=1)"
+echo "    Induce incident: task break  (investigate manually from the console; set BALLAST_ALERT_WATCH=1 to auto-start on alert)"
 BALLAST_API_URL="http://localhost:8000" \
   $PY -m streamlit run console/app.py \
   --server.address=0.0.0.0 --server.port=8501 --server.headless=true

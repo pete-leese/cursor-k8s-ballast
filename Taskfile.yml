@@ -83,18 +83,19 @@ tasks:
       - ./scripts/run-console.sh
 
   demo:
-    desc: Console + auto-investigate when CrashLoop alert fires (needs cluster:forward)
+    desc: Console with manual investigations (needs cluster:forward)
     deps: [setup]
     cmds:
       - ./scripts/demo.sh
 
   demo:cursor:
-    desc: Demo console with live Cursor Cloud Agent (requires CURSOR_API_KEY)
+    desc: Demo console with live Cursor Cloud Agent, manual investigations (requires CURSOR_API_KEY)
     deps: [setup]
     env:
       BALLAST_INVESTIGATOR: cursor
     cmds:
-      - BALLAST_ALERT_WATCH=1 ./scripts/demo.sh
+      # Manual by default; opt into auto-investigate with: BALLAST_ALERT_WATCH=1 task demo:cursor
+      - ./scripts/demo.sh
 
   deploy:
     desc: Deploy the five services via ArgoCD (app-of-apps GitOps)
