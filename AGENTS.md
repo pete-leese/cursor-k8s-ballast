@@ -71,11 +71,13 @@ GitOps via ArgoCD is the deploy path:
   `./scripts/deploy.sh` re-runs bootstrap idempotently.
   **ArgoCD tracks `main`** (targetRevision), so the branch must be pushed/merged
   there, or edit `targetRevision` in `deploy/argocd/*.yaml`.
-- `./scripts/break.sh` / `./scripts/fix.sh` are **git-commit driven**: they edit
+- `./scripts/break.sh` is **git-commit driven**: it edits
   `deploy/services/ingest.values.yaml` (`limits.memory` via `awk`, preserving
-  the rest), commit, and push to the current branch; ArgoCD syncs the change.
+  the rest), commits, and pushes to the current branch; ArgoCD syncs the change.
   `break.sh` → `16Mi` → OOMKill → CrashLoopBackOff → `StreamIngestCrashLooping`
-  after `for: 1m`; `fix.sh` → `128Mi`.
+  after `for: 1m`. Remediation reverses this in the same file: restore
+  `limits.memory` in `deploy/services/ingest.values.yaml` to a healthy value
+  and let ArgoCD sync it.
 - `task rca` after `kubectl -n monitoring port-forward
   svc/kube-prometheus-stack-prometheus 9090`.
 - `mcp-grafana` (in `.mcp.json`) needs a Viewer token: `task grafana:token`
@@ -100,8 +102,9 @@ GitOps via ArgoCD is the deploy path:
   sets `serviceMonitorSelectorNilUsesHelmValues=false` (and the rule/pod/probe
   equivalents) so the per-service `ServiceMonitor`s and the
   `ballast-crashloop` `PrometheusRule` are scraped without extra release labels.
-- **The RCA engine never mutates the cluster.** Only `break.sh` / `fix.sh` (Helm)
-  change state. `ballast` triage and the MCP tools are read-only.
+- **The RCA engine never mutates the cluster.** Only `break.sh` and the
+  remediation commit (Helm/git) change state. `ballast` triage and the MCP
+  tools are read-only.
 - **ArgoCD is the GitOps representation, not the live-demo driver.** The
   self-contained incident is induced via Helm (`break.sh`); ArgoCD Applications
   in `deploy/argocd/` show how the same chart would be synced from git in
