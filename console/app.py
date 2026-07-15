@@ -15,7 +15,6 @@ from datetime import datetime
 
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 
 from theme import (
     LOGO_PNG,
@@ -106,7 +105,7 @@ def disable_streamlit_hotkeys() -> None:
     capturing listener there that swallows a plain (or Ctrl/Cmd-held) "c" before
     Streamlit sees it — while leaving Ctrl/Cmd+C copy and typing in fields alone.
     """
-    components.html(
+    st.iframe(
         """
         <script>
         (function () {
@@ -132,7 +131,7 @@ def disable_streamlit_hotkeys() -> None:
         })();
         </script>
         """,
-        height=0,
+        height=1,
     )
 
 
@@ -213,6 +212,14 @@ def short_rev(value: str | None, n: int = 8) -> str:
     if not value:
         return "—"
     return value[:n]
+
+
+def gh_ref(url: str | None) -> str:
+    """Return '#<number>' for a GitHub issue/PR URL, else ''."""
+    if not url:
+        return ""
+    tail = url.rstrip("/").rsplit("/", 1)[-1]
+    return f"#{tail}" if tail.isdigit() else ""
 
 
 def api_get(path: str, *, quiet: bool = False):
@@ -465,30 +472,47 @@ def verdict_completion_watcher() -> None:
 
     The in-view toast (main render) only fires while the operator is watching
     that specific investigation. This fragment covers the rest: it runs on
-    every view (cluster overview or a different run) and toasts once when a run
-    it observed *running this session* leaves the running state with a verdict.
+    every view (cluster overview or a different run) and toasts once for any run
+    that *appears after the page loaded* and reaches a terminal state — even
+    fast/auto-created runs (e.g. the backend alert-watcher) that complete
+    between polls and were never caught "running".
+
+    Pre-existing runs never toast: the first tick records a session baseline of
+    the ids already present at load (``_toast_baseline_ids``); ids in that set
+    are ignored forever, so a page load full of already-complete runs stays
+    silent. Deduplicates against the in-view toast through the shared
+    ``_verdict_seen_<id>`` flag, so exactly one toast fires per completed run
+    regardless of which view is active.
 
     Kept lightweight and consistent with ``live_refresh_indicator``: one
     investigations-list request per tick (a fragment-local repaint, never a
-    full-page rerun), plus a single detail fetch only at the moment a watched
-    run transitions out of the running state. Deduplicates against the in-view
-    toast through the shared ``_verdict_seen_<id>`` flag, so exactly one toast
-    fires per completed run regardless of which view is active. Pre-existing
-    completed runs never toast: the ``_verdict_watching_<id>`` gate only trips
-    for runs seen running during this session.
+    full-page rerun), plus a single detail fetch only when a fresh run is first
+    observed terminal (to confirm the verdict landed, since the list omits rca).
     """
     if not st.session_state.get("auto_refresh", True):
         return
-    for rec in api_get("/investigations", quiet=True) or []:
+    records = api_get("/investigations", quiet=True) or []
+    # One-time session baseline: everything present on the first tick is
+    # considered pre-existing and must never toast (no spam for old runs on
+    # load). Captured from this same list call.
+    if "_toast_baseline_ids" not in st.session_state:
+        st.session_state["_toast_baseline_ids"] = {
+            rec.get("id") for rec in records if rec.get("id")
+        }
+    baseline = st.session_state["_toast_baseline_ids"]
+    for rec in records:
         vid = rec.get("id")
-        if not vid or st.session_state.get(f"_verdict_seen_{vid}"):
+        if not vid or vid in baseline or st.session_state.get(f"_verdict_seen_{vid}"):
             continue
         watch_key = f"_verdict_watching_{vid}"
         if rec.get("status") in RUNNING:
+            # Keep the in-view path consistent; not required to toast anymore.
             st.session_state[watch_key] = True
-        elif st.session_state.get(watch_key):
-            # Left the running state after we watched it run — confirm the
-            # verdict landed (the list omits rca), then toast exactly once.
+        else:
+            # A run that appeared AND reached a terminal state after load —
+            # toast once whether or not we ever caught it running. Confirm the
+            # verdict landed (the list omits rca), then mark seen so we neither
+            # re-toast nor re-fetch its detail on later ticks.
             detail = api_get(f"/investigations/{vid}", quiet=True) or {}
             if detail.get("rca"):
                 verdict_complete_toast(vid)
@@ -718,9 +742,9 @@ def render_cluster_overview(overview: dict) -> None:
             )
         elif incident and pf.get("ready"):
             st.markdown(
-                f'<p class="ballast-signals-note">'
-                f"Failing signals on <strong>{html_lib.escape(primary)}</strong> — "
-                f"click <strong>Investigate</strong> for RCA and an auto-fix PR.</p>",
+                f'<div class="ballast-problem">'
+                f'{mdi("error", filled=True)} Incident detected on {html_lib.escape(primary)}'
+                f"</div>",
                 unsafe_allow_html=True,
             )
         elif not incident:
@@ -1319,29 +1343,35 @@ def render_autofix_status(record: dict, action: str) -> None:
             st.link_button("GitHub issue →", issue_url, use_container_width=True)
         return
 
-    if in_flight:
-        st.caption(f"Status: {status.replace('_', ' ')}…")
-
     cols = st.columns(2)
     with cols[0]:
         if issue_url:
-            st.link_button("GitHub issue filed →", issue_url, use_container_width=True)
+            st.link_button(
+                f"GitHub issue {gh_ref(issue_url)} →".replace("  ", " "),
+                issue_url,
+                use_container_width=True,
+            )
             created = record.get("remediation_issue_created_at")
-            if created:
-                st.caption(f"Filed {fmt_dt(created)}")
+            st.caption(f"Filed {fmt_dt(created)}" if created else "Filed")
         elif in_flight:
             st.caption("GitHub issue — filing…")
         else:
             st.caption("GitHub issue — pending")
     with cols[1]:
         if pr_url:
-            st.link_button("Forward-fix PR →", pr_url, use_container_width=True)
+            st.link_button(
+                f"Forward-fix PR {gh_ref(pr_url)} →".replace("  ", " "),
+                pr_url,
+                use_container_width=True,
+            )
             opened = record.get("remediation_pr_opened_at")
             merged = record.get("remediation_pr_merged_at")
             if merged:
                 st.caption(f"Merged {fmt_dt(merged)}")
             elif opened:
                 st.caption(f"Opened {fmt_dt(opened)}")
+            else:
+                st.caption("Opened")
         elif in_flight or (status == "complete" and agent_id and not pr_url):
             st.caption("Looking up fix PR on GitHub…")
             if agent_id:
@@ -1488,6 +1518,45 @@ CLUSTER_VIEW = "__cluster__"
 overview = api_get("/cluster/overview") or {}
 primary_service = overview.get("primary_service", "ingest")
 
+@st.dialog("Clear all investigations?")
+def confirm_clear_all() -> None:
+    st.warning(
+        "This permanently removes **all** investigation records and their "
+        "artifacts. This cannot be undone.",
+        icon=":material/warning:",
+    )
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        if st.button(
+            "Yes, clear all",
+            key="clear_all_yes",
+            use_container_width=True,
+            type="primary",
+        ):
+            res = api_delete("/investigations")
+            if res is not None:
+                # `selected` is the radio widget key — can't be set after the
+                # widget exists. Signal the reset and apply it before the radio
+                # is built on the next run.
+                st.session_state["_reset_selection"] = True
+                st.session_state.pop("all_good", None)
+            # Clear the "keep dialog open" flag on both paths so the top-level
+            # guard doesn't immediately re-invoke the dialog after it closes.
+            st.session_state.pop("_show_clear_dialog", None)
+            st.rerun()
+    with col_no:
+        if st.button(
+            "Cancel",
+            key="clear_all_cancel",
+            use_container_width=True,
+            type="secondary",
+        ):
+            # Clear the flag first, then a bare rerun dismisses the dialog
+            # without re-opening it on the next run.
+            st.session_state.pop("_show_clear_dialog", None)
+            st.rerun()
+
+
 with st.sidebar:
     st.markdown(brand_block(), unsafe_allow_html=True)
     st.divider()
@@ -1556,26 +1625,18 @@ with st.sidebar:
 
     if total_investigations:
         st.divider()
-        confirm_clear = st.checkbox(
-            "Confirm clear all",
-            key="confirm_clear_investigations",
-            help="Required before clearing — removes every investigation and its artifacts.",
-        )
         if st.button(
             "Clear all investigations",
             use_container_width=True,
-            disabled=not confirm_clear,
             type="secondary",
+            help="Removes every investigation and its artifacts.",
         ):
-            res = api_delete("/investigations")
-            if res is not None:
-                # `selected` is the radio widget key — can't be set after the
-                # widget exists. Signal the reset and apply it before the radio
-                # is built on the next run.
-                st.session_state["_reset_selection"] = True
-                st.session_state.pop("confirm_clear_investigations", None)
-                st.session_state.pop("all_good", None)
-                st.rerun()
+            # Don't open the dialog directly here: a background watcher's
+            # app-scoped rerun would re-run the script without re-entering this
+            # button branch, so Streamlit would auto-dismiss the dialog. Instead
+            # set a flag and let the top-level guard re-open it on every run.
+            st.session_state["_show_clear_dialog"] = True
+            st.rerun()
 
     if st.session_state.get("api_error"):
         st.warning(st.session_state["api_error"])
@@ -1594,6 +1655,14 @@ with st.sidebar:
                 key="auto_refresh",
                 help="Live-refreshes only the running investigation in place — no full-page reload.",
             )
+
+# Re-open the "Clear all investigations?" dialog on EVERY full script run while
+# the flag is set. Because this runs at top level (not inside a fragment), an
+# app-scoped rerun triggered by a background watcher re-invokes the dialog and
+# it stays open instead of being auto-dismissed. The flag is cleared by both
+# buttons inside `confirm_clear_all`, so the dialog can't get stuck reopening.
+if st.session_state.get("_show_clear_dialog"):
+    confirm_clear_all()
 
 selected = st.session_state.get("selected")
 cluster_mode = selected == CLUSTER_VIEW
@@ -1668,9 +1737,14 @@ else:
     vid = record["id"]
     seen_key = f"_verdict_seen_{vid}"
     watch_key = f"_verdict_watching_{vid}"
+    # Runs already present at page load are in the watcher's session baseline and
+    # must never toast (shared with `verdict_completion_watcher`, which also
+    # dedups via `_verdict_seen_<id>` so a run toasts at most once across both
+    # paths). Baseline may be unset if auto-refresh was never on this session.
+    toast_baseline = st.session_state.get("_toast_baseline_ids") or set()
     if not rca:
         st.session_state[watch_key] = True
-    elif not st.session_state.get(seen_key):
+    elif not st.session_state.get(seen_key) and vid not in toast_baseline:
         if st.session_state.get(watch_key):
             verdict_complete_toast(vid)
         st.session_state[seen_key] = True

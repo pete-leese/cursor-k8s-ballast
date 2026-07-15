@@ -360,6 +360,28 @@ BALLAST_CSS = """
     filter: drop-shadow(0 1px 1px rgba(5, 150, 105, 0.35));
   }
 
+  .ballast-problem {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    font-size: 1.05rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    color: #881337;
+    background: linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%);
+    border: 1px solid #fda4af;
+    border-radius: 4px;
+    padding: 0.85rem 1.1rem;
+    margin: 0 0 1rem 0;
+    box-shadow: 0 1px 0 rgba(190, 18, 60, 0.12);
+  }
+  .ballast-problem .material-symbols-outlined {
+    color: #e11d48;
+    font-size: 1.75rem;
+    font-variation-settings: "FILL" 1, "wght" 600, "GRAD" 0, "opsz" 24;
+    filter: drop-shadow(0 1px 1px rgba(190, 18, 60, 0.35));
+  }
+
   .ballast-signals-note {
     margin: 0.1rem 0 1rem 0;
     font-size: 0.85rem;
@@ -553,6 +575,51 @@ BALLAST_CSS = """
   section[data-testid="stSidebar"] .stButton > button,
   .stButton > button {
     border-radius: 2px !important;
+  }
+  /* Secondary buttons on the DARK sidebar rail kept Streamlit's near-white
+     default background, so the rail's light text (#e5e7eb) was invisible until
+     hover. Target the stable stBaseButton-secondary testid (the button isn't a
+     direct child of .stButton in the sidebar). Give it a transparent/dark
+     surface with a subtle border so the light label reads at rest. */
+  section[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"] {
+    background: transparent !important;
+    border: 1px solid #334155 !important;
+    color: #e5e7eb !important;
+  }
+  section[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"] * {
+    color: #e5e7eb !important;
+  }
+  section[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"]:hover {
+    background: rgba(148, 163, 184, 0.12) !important;
+    border-color: #64748b !important;
+    color: #f9fafb !important;
+  }
+  section[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"]:hover * {
+    color: #f9fafb !important;
+  }
+  /* Secondary buttons OUTSIDE the sidebar sit on light surfaces — keep a
+     readable slate label with a teal hover accent. */
+  [data-testid="stBaseButton-secondary"] {
+    color: #334155 !important;
+  }
+  [data-testid="stBaseButton-secondary"]:hover {
+    color: #0f766e !important;
+    border-color: #0f766e !important;
+  }
+
+  /* Destructive confirm inside the "Clear all investigations?" dialog. Keyed on
+     the stable st-key class (from the button's key) rather than Emotion hashes,
+     so the primary CTA reads red instead of the default teal. */
+  .st-key-clear_all_yes .stButton > button[kind="primary"],
+  .st-key-clear_all_yes.stButton > button[kind="primary"] {
+    background: #b91c1c !important;
+    border-color: #b91c1c !important;
+    color: #fef2f2 !important;
+  }
+  .st-key-clear_all_yes .stButton > button[kind="primary"]:hover,
+  .st-key-clear_all_yes.stButton > button[kind="primary"]:hover {
+    background: #991b1b !important;
+    border-color: #991b1b !important;
   }
 
   /* Settings (gear) trigger pinned to the bottom of the sidebar: compact and
