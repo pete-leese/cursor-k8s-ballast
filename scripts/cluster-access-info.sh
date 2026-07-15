@@ -71,7 +71,7 @@ echo "    Ballast API      http://localhost:8000/healthz"
 echo "    Ballast console  http://localhost:8501/"
 echo
 echo "  Useful commands"
-echo "    task demo                # console + auto-investigate on alert"
+echo "    task demo                # console + manual investigations (BALLAST_ALERT_WATCH=1 to auto-investigate)"
 echo "    task console             # API + console only"
 echo "    task cluster:forward     # start all port-forwards (separate terminal)"
 echo "    task rca               # RCA engine (needs Prometheus forward on ${PROMETHEUS_PORT})"
