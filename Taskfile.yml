@@ -23,32 +23,6 @@ tasks:
     cmds:
       - "{{.PY}} -m playwright install chromium"
 
-  schema:
-    desc: Regenerate schema/rca.schema.json from ballast/contract.py
-    deps: [setup]
-    cmds:
-      - "{{.PY}} -m ballast.contract > schema/rca.schema.json"
-
-  validate:
-    desc: Validate the RCA fixture against the contract
-    deps: [setup]
-    cmds:
-      - '{{.PY}} -c "from ballast.contract import RCA; RCA.model_validate_json(open(\"fixtures/rca_ingest.json\").read()); print(\"fixture ok\")"'
-
-  check:
-    desc: Regenerate schema and validate the fixture
-    cmds:
-      - task: schema
-      - task: validate
-
-  blast-radius:
-    desc: Print the blast radius for a service (SVC=ingest)
-    deps: [setup]
-    vars:
-      SVC: '{{.SVC | default "ingest"}}'
-    cmds:
-      - "{{.PY}} -m ballast.cli blast-radius {{.SVC}}"
-
   cluster:up:
     desc: Create kind cluster, monitoring stack, ArgoCD, and sync the five services
     cmds:
@@ -76,59 +50,14 @@ tasks:
     cmds:
       - ./scripts/port-forward.sh
 
-  console:
-    desc: Start Ballast API (:8000) and investigation console (:8501)
-    deps: [setup]
-    cmds:
-      - ./scripts/run-console.sh
-
   demo:
-    desc: Console with manual investigations (needs cluster:forward)
-    deps: [setup]
-    cmds:
-      - ./scripts/demo.sh
-
-  demo:cursor:
-    desc: Demo console with live Cursor Cloud Agent, manual investigations (requires CURSOR_API_KEY)
+    desc: Console with the live Cursor Cloud Agent, manual investigations by default (needs CURSOR_API_KEY + cluster:forward)
     deps: [setup]
     env:
       BALLAST_INVESTIGATOR: cursor
     cmds:
-      # Manual by default; opt into auto-investigate with: BALLAST_ALERT_WATCH=1 task demo:cursor
+      # Manual by default; opt into auto-investigate with: BALLAST_ALERT_WATCH=1 task demo
       - ./scripts/demo.sh
-
-  deploy:
-    desc: Deploy the five services via ArgoCD (app-of-apps GitOps)
-    cmds:
-      - ./scripts/deploy.sh
-
-  argocd:bootstrap:
-    desc: Apply the ArgoCD AppProject + root app-of-apps
-    cmds:
-      - ./scripts/argocd-bootstrap.sh
-
-  grafana:token:
-    desc: Mint a read-only Grafana Viewer token for mcp-grafana (port-forward first)
-    cmds:
-      - ./scripts/grafana-token.sh
-
-  grafana:dashboard:
-    desc: Apply / refresh the Ballast RCA Grafana dashboard ConfigMap
-    cmds:
-      - ./scripts/apply-grafana-dashboard.sh
-
-  sdk:install:
-    desc: Install the sdk-runner Node dependencies (@cursor/sdk)
-    dir: sdk-runner
-    cmds:
-      - npm install
-
-  sdk:smoke:
-    desc: Run a live Cursor Cloud Agent investigation (requires CURSOR_API_KEY)
-    deps: [sdk:install]
-    dir: sdk-runner
-    cmds:
-      - node smoke-test.mjs
 
   break:
     desc: Open incident PR on main (ingest 128Mi -> 16Mi; merge manually)
@@ -139,32 +68,6 @@ tasks:
     desc: Open forward-fix PR on main (restore ingest memory to 128Mi)
     cmds:
       - ./scripts/fix.sh
-
-  rca:
-    desc: Run the RCA engine against the live cluster (SVC=ingest)
-    deps: [setup]
-    vars:
-      SVC: '{{.SVC | default "ingest"}}'
-    cmds:
-      - "{{.PY}} -m ballast.cli investigate --service {{.SVC}} --healthy-memory 128Mi"
-
-  rca:mock:
-    desc: Run the RCA engine in mock mode (replays the fixture, no cluster)
-    deps: [setup]
-    cmds:
-      - "{{.PY}} -m ballast.cli investigate --service ingest --mock"
-
-  rca:offline:
-    desc: End-to-end RCA against a real Prometheus + KSM stub (no cluster needed)
-    deps: [setup]
-    cmds:
-      - ./scripts/offline-rca-demo.sh
-
-  mcp:serve:
-    desc: Run the ballast MCP server on stdio (for Cursor)
-    deps: [setup]
-    cmds:
-      - "{{.PY}} -m ballast.mcp_server"
 
   clean:
     desc: Delete the kind cluster

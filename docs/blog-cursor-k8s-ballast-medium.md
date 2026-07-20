@@ -247,7 +247,7 @@ task setup
 task setup:playwright          # evidence screenshots
 task cluster:up                # kind + monitoring + ArgoCD + apps
 task cluster:forward           # Prometheus / Grafana / ArgoCD locally
-task console                   # Ballast API + UI
+task demo                      # Ballast API + UI (live Cursor Cloud Agent)
 
 task break                     # open incident PR → merge to main
 # wait for CrashLoop + alert

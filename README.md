@@ -34,39 +34,147 @@ ArgoCD GitOps.
 | `ballast/mcp_server.py` | Read-only MCP tools a Cursor agent calls to investigate. |
 | `sdk-runner/` | Node `@cursor/sdk` runner for a live Cursor Cloud Agent investigation. |
 | `fixtures/rca_ingest.json` | A valid, realistic RCA (feeds the mock investigator). |
-| `scripts/` | `setup-cluster.sh`, `deploy.sh`, `argocd-bootstrap.sh`, `break.sh`, `fix.sh`, `grafana-token.sh`, `offline-rca-demo.sh`. |
+| `scripts/` | `setup-cluster.sh`, `deploy.sh`, `port-forward.sh`, `demo.sh`, `run-console.sh`, `break.sh`, `fix.sh`, `grafana-token.sh`, `offline-rca-demo.sh`. |
 | `architecture.md` | Division of labour, seams, deferred scope. |
 | `docs/incident-runbook.md` | The narrated end-to-end incident walkthrough. |
 
-## Quick start
+## Prerequisites
 
-Runs on a Mac (Apple Silicon) with **Docker Desktop** + `kind`, `kubectl`,
-`helm`, `python3` (and optionally [`task`](https://taskfile.dev)). ArgoCD tracks
-`main` by default, so push/merge your changes to `main` first (or point
-`targetRevision` in `deploy/argocd/*.yaml` at your branch).
+The full demo runs on a **Mac (Apple Silicon) with Docker Desktop** — the
+in-cluster CrashLoopBackOff (`kind` + a real kubelet OOM-kill) needs a normal
+Docker/Kubernetes host. On macOS most tools install via [Homebrew](https://brew.sh):
+
+| Tool | Why | Install (macOS) |
+|---|---|---|
+| **Docker Desktop** | Runs the `kind` node containers. Apple Silicon is the tested target. | [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) |
+| **kind** | The local Kubernetes cluster. | `brew install kind` |
+| **kubectl** | Talk to the cluster / port-forward. | `brew install kubectl` |
+| **helm** | Installs kube-prometheus-stack. | `brew install helm` |
+| **task** ([go-task](https://taskfile.dev)) | Runs the workflows in `Taskfile.yml`. | `brew install go-task/tap/go-task` |
+| **Python 3.11+** | The `ballast/` RCA engine + console (repo containers use 3.12). | ships with macOS / `brew install python@3.12` |
+| **gh** (GitHub CLI) | `task break` / `task fix` open PRs via `gh`. Run `gh auth login` once. | `brew install gh` |
+| **Node.js 18+** | `sdk-runner/` (`@cursor/sdk`) for a live Cursor Cloud Agent. | `brew install node` |
+| **kubeconform** | Optional — offline chart/manifest validation (see `AGENTS.md`). | `brew install kubeconform` |
+
+For a **live Cursor Cloud Agent** investigation you also need a **Cursor paid
+plan**, a `CURSOR_API_KEY`, and the **Cursor GitHub app authorised** on your fork
+of the repo (so the agent can clone it and open PRs).
+
+> ArgoCD tracks `main` by default, so push/merge changes to `main` (or point
+> `targetRevision` in `deploy/argocd/*.yaml` at your branch). Set
+> `CURSOR_TARGET_REPO` in `.env` to your fork.
+
+## Setup
 
 ```bash
-task setup            # python venv + engine deps
-task cluster:up       # kind + kube-prometheus-stack + ArgoCD + sync the 5 services
-task deploy           # re-run GitOps bootstrap only (idempotent)
-task break            # open incident PR on main; merge when ready -> ArgoCD syncs
+git clone https://github.com/pete-leese/cursor-k8s-ballast
+cd cursor-k8s-ballast
 
-# In another shell, expose Prometheus, then run the RCA:
-kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090 &
-task rca              # correlate rollout+alert+topology -> validated RCA
+task setup                 # create .venv and install the RCA engine + console deps
+cp .env.example .env       # then edit .env (at minimum set CURSOR_API_KEY for the demo)
 
-task fix              # open forward-fix PR on main
+task setup:playwright      # optional: Chromium for ArgoCD/Prometheus/Grafana evidence screenshots
+(cd sdk-runner && npm install)   # optional: only for live Cursor Cloud Agents
 ```
 
-No cluster? Two offline paths (useful on hosts that can't run nested
-Kubernetes — see `AGENTS.md`):
+`task setup` creates the repo-root virtualenv (`.venv/`); everything Python runs
+from it (`.venv/bin/python -m ballast...`). See
+[Environment variables](#environment-variables) for what to put in `.env`.
+
+## Quickstart demo
+
+Four steps (`task demo` runs the console wired to a **live Cursor Cloud Agent**,
+so `CURSOR_API_KEY` must be set in `.env`):
 
 ```bash
-task rca:mock       # replay a fixture through the real contract validation
-task rca:offline    # real Prometheus + kube-state-metrics stub: the
-                    # StreamIngestCrashLooping alert fires and the engine
-                    # produces a validated RCA from the live alert
+task cluster:up          # 1. kind + kube-prometheus-stack + ArgoCD + sync the 5 services
+task cluster:forward:bg  # 2. background port-forwards for Grafana/Prometheus/Alertmanager/ArgoCD
+task demo                # 3. Ballast API (:8000) + console (:8501), manual investigations by default
+task break               # 4. open the incident PR on main; merge it -> ArgoCD syncs the bad limit
 ```
+
+What each command does and the URLs it exposes:
+
+| Command | What it does | URLs |
+|---|---|---|
+| `task cluster:up` | Creates the `ballast` kind cluster, installs the monitoring stack + ArgoCD, and syncs the five services. Idempotent. | — |
+| `task cluster:forward:bg` | Port-forwards the platform UIs in the background (stop with `task cluster:forward:stop`; use `task cluster:forward` to run in the foreground). | Prometheus `:9090`, Grafana `:3000` (`admin`/`admin`), Alertmanager `:9093`, ArgoCD `https://localhost:8080` (`admin` / from `argocd-initial-admin-secret`) |
+| `task demo` | Starts the Ballast API and Streamlit console in **live Cursor Cloud Agent** mode (`BALLAST_INVESTIGATOR=cursor`). Investigations are manual (button-triggered) by default; run `BALLAST_ALERT_WATCH=1 task demo` to auto-investigate when the alert fires. Needs Prometheus reachable (step 2). | API `http://localhost:8000`, console `http://localhost:8501` |
+| `task break` | Opens the incident PR (see below). | — |
+
+Run `task cluster:info` at any time to reprint the URLs and credentials, or
+`task` (no args) to list every available task.
+
+## Inducing and resolving the incident
+
+**Induce** — `task break` branches from `main`, lowers `ingest`'s memory limit
+to `16Mi` in `deploy/services/ingest.values.yaml`, and opens a PR via `gh`. Merge
+it: ArgoCD syncs the change, the kubelet OOM-kills `ingest` (exit 137) into
+**CrashLoopBackOff**, and `StreamIngestCrashLooping` fires after ~1 minute.
+
+```bash
+kubectl -n demo get pods -l app=ingest -w        # watch it crash-loop
+open http://localhost:9090/alerts?state=firing   # watch the alert fire
+```
+
+**Resolve** — investigate from the console, which recommends a **forward-fix**
+(restore the one memory-limit field). Two ways to apply it:
+
+- **Cloud Agent PR** — with `CURSOR_API_KEY` set (and auto-remediate on by
+  default in the console when a key is present), the Cursor agent opens a PR that
+  restores `ingest` memory. Review and merge; ArgoCD syncs the healthy value.
+- **`task fix`** — opens the equivalent forward-fix PR (restore `128Mi`) directly
+  via `gh`. Merge it and ArgoCD syncs.
+
+## Teardown
+
+```bash
+task clean               # delete the kind cluster
+```
+
+Stop background port-forwards first with `task cluster:forward:stop` if they are
+still running.
+
+## Troubleshooting
+
+- **`Prometheus not reachable` / `task demo` exits** — start the port-forwards
+  first (`task cluster:forward:bg`); the console needs Prometheus on `:9090`.
+- **`task break` / `task fix` fail** — install and authenticate the GitHub CLI
+  (`gh auth login`), and make sure the current branch has a remote to push to.
+- **Docker not running** — start Docker Desktop before `task cluster:up`;
+  `kind` needs the daemon.
+- **Cloud Agent can't see live metrics** — a **cloud** run investigates from the
+  brief + repo and cannot reach your Mac's `localhost` Prometheus/Grafana. Set
+  `CURSOR_RUNTIME=local` to run on your machine with local MCP access.
+- **Nested-cluster note** — the caveat in `AGENTS.md` about not running a cluster
+  is specific to the Cursor **Cloud VM**; the local Mac path above works normally.
+
+## Environment variables
+
+Nothing in `.env` is required for the local deterministic engine, but the demo's
+live Cursor Cloud Agent and the Grafana MCP need a few. Copy the template and
+edit it: `cp .env.example .env`. Values are read from `.env` (via
+`scripts/run-console.sh`) and the process environment.
+
+| Variable | Purpose | Default | Required? |
+|---|---|---|---|
+| `CURSOR_API_KEY` | Auth for the live Cursor Cloud Agent investigation and Cloud Agent remediation PRs. | _(empty)_ | Required for `task demo` / cursor mode |
+| `CURSOR_RUNTIME` | `cloud` runs the agent in Cursor's cloud (can't reach your Mac's localhost); `local` runs it on this machine so it can use local Prometheus/Grafana MCP. | `cloud` | Optional |
+| `CURSOR_TARGET_REPO` | Repo the Cloud Agent clones. Point at your fork. | this repo | Optional |
+| `CURSOR_TARGET_REF` | Git ref the agent works from. | `main` | Optional |
+| `CURSOR_MODEL` | Model the Cloud Agent uses. | `composer-2.5` | Optional |
+| `BALLAST_INVESTIGATOR` | Investigator backend: `engine` (deterministic), `mock` (replay fixture), or `cursor` (live Cloud Agent). `task demo` sets `cursor`. | `engine` | Optional |
+| `BALLAST_ALERT_WATCH` | `1` auto-starts an investigation when `StreamIngestCrashLooping` fires; `0` keeps investigations manual (button-triggered). | `0` | Optional |
+| `BALLAST_AUTO_REMEDIATE` | `1` lets the console open a remediation PR automatically. The console defaults this to `1` when `CURSOR_API_KEY` is set. | `0` (auto `1` if key set) | Optional |
+| `BALLAST_API_URL` | Where the console reaches the Ballast API. | `http://localhost:8000` | Optional |
+| `BALLAST_HEALTHY_MEMORY` | The healthy memory limit the RCA restores. | `128Mi` | Optional |
+| `PROMETHEUS_URL` | Prometheus HTTP API (after port-forward). | `http://localhost:9090` | Optional |
+| `GRAFANA_URL` | Grafana base URL for the MCP / evidence screenshots. | `http://localhost:3000` | Optional |
+| `GRAFANA_SERVICE_ACCOUNT_TOKEN` | Viewer token for the read-only `mcp-grafana` server. Mint one with `./scripts/grafana-token.sh` (Grafana port-forwarded). | _(empty)_ | Optional |
+| `GRAFANA_DASHBOARD_UID` | UID of the provisioned Ballast RCA dashboard. | `ballast-rca` | Optional |
+| `GH_TOKEN` / `GITHUB_TOKEN` | Fallback GitHub token for remediation PRs when the macOS keyring isn't available to the API process (classic PAT with `repo` scope). | _(empty)_ | Optional |
+| `ARGOCD_PORT` / `ARGOCD_APP_NAMESPACE` / `ARGOCD_PROJECT` | ArgoCD UI port and namespace/project used for evidence screenshots and access info. | `8080` / `argocd` / `k8s-ballast` | Optional |
+| `BALLAST_ARGOCD_SCREENSHOT` / `BALLAST_PROMETHEUS_SCREENSHOT` / `BALLAST_GRAFANA_SCREENSHOT` | Evidence-screenshot mode (`auto`\|`live`\|`snapshot`\|`off`); needs `task setup:playwright`. | `auto` | Optional |
 
 ## The RCA at a glance
 
@@ -91,13 +199,13 @@ Two MCP servers ship in `.mcp.json`:
   `rollout_status`, `blast_radius`, `run_rca`.
 - **`grafana`** — the official [`mcp-grafana`](https://github.com/grafana/mcp-grafana),
   read-only via a Viewer service-account token. Mint one with
-  `task grafana:token` (port-forward Grafana first) and put it in `.env`.
+  `./scripts/grafana-token.sh` (port-forward Grafana first) and put it in `.env`.
 
 A live investigation runs through `sdk-runner/` (Node `@cursor/sdk`):
 
 ```bash
 export CURSOR_API_KEY=...        # cursor.com -> Integrations -> API Keys
-task sdk:smoke                   # cloud agent clones the repo, returns an RCA
+(cd sdk-runner && npm install && node smoke-test.mjs)  # cloud agent clones the repo, returns an RCA
 ```
 
 A **cloud** agent runs in Cursor's cloud and cannot reach your Mac's `localhost`
