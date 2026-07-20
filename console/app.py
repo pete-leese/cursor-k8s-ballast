@@ -222,6 +222,19 @@ def gh_ref(url: str | None) -> str:
     return f"#{tail}" if tail.isdigit() else ""
 
 
+def cursor_agent_url(agent_id: str | None) -> str | None:
+    """Build the cursor.com web run URL for a Cursor Cloud Agent id.
+
+    Returns None for empty/local ids so callers can hide the link rather than
+    ever pointing at a bogus (or localhost) target. Cloud agent ids are
+    ``bc-``-prefixed, but we accept any non-empty id defensively — the capture
+    path only ever stores real cloud ids.
+    """
+    if not agent_id:
+        return None
+    return f"https://cursor.com/agents/{agent_id}"
+
+
 def api_get(path: str, *, quiet: bool = False):
     try:
         r = requests.get(f"{API}{path}", timeout=8)
@@ -322,9 +335,9 @@ def render_rca_discuss(investigation_id: str, record: dict) -> None:
             )
         st.rerun()
 
-    agent_id = status.get("cursor_agent_id")
-    if agent_id:
-        st.caption(f"[Open remediation agent](https://cursor.com/agents/{agent_id})")
+    agent_url = cursor_agent_url(status.get("cursor_agent_id"))
+    if agent_url:
+        st.caption(f"[Open remediation agent]({agent_url})")
 
 
 def api_post(path: str, body: dict | None = None, *, timeout: int = 10):
@@ -1374,10 +1387,11 @@ def render_autofix_status(record: dict, action: str) -> None:
                 st.caption("Opened")
         elif in_flight or (status == "complete" and agent_id and not pr_url):
             st.caption("Looking up fix PR on GitHub…")
-            if agent_id:
+            agent_url = cursor_agent_url(agent_id)
+            if agent_url:
                 st.link_button(
                     "Remediation agent →",
-                    f"https://cursor.com/agents/{agent_id}",
+                    agent_url,
                     use_container_width=True,
                 )
         else:
@@ -1783,15 +1797,28 @@ else:
             unsafe_allow_html=True,
         )
 
-    cursor_url = next(
-        (
-            e.get("text")
-            for e in record.get("events", [])
-            if (e.get("text") or "").startswith("http")
-        ),
-        None,
-    )
-    if cursor_url:
+    # Deep-link to the live Cursor Cloud Agent run. Prefer the persisted run URL,
+    # then derive it from the captured agent id, then fall back to a scan of the
+    # launch status events. Every source must resolve to a real cursor.com run
+    # page: never link to arbitrary http text (the streamed RCA is full of
+    # localhost deeplinks), and hide the button when there is no valid run URL so
+    # it can never resolve against the console origin (localhost).
+    cursor_url = record.get("cursor_run_url")
+    if not cursor_url:
+        agent_id = record.get("cursor_agent_id")
+        if agent_id:
+            cursor_url = cursor_agent_url(agent_id)
+    if not cursor_url:
+        cursor_url = next(
+            (
+                e.get("text")
+                for e in record.get("events", [])
+                if e.get("type") == "status"
+                and "cursor.com/agents/" in (e.get("text") or "")
+            ),
+            None,
+        )
+    if cursor_url and "cursor.com/agents/" in cursor_url:
         st.link_button("Watch this run in Cursor →", cursor_url)
 
     if record["status"] == "failed" and record.get("error"):

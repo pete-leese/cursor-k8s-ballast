@@ -142,8 +142,17 @@ def run_investigation(
         final_rca = None
         for event in investigator.investigate(brief):
             STORE.append_event(investigation_id, event)
+            # The sdk-runner emits the launch event with the cloud agent id in
+            # `name` and the web run URL in `text` (…/agents/<id>). Capture both
+            # so the console can deep-link the live run (SDK -> store -> API ->
+            # button). Match the real cursor.com run URL only — the streamed RCA
+            # text is full of localhost deeplinks that must never leak in here.
             if event.name and str(event.name).startswith("bc-"):
                 STORE.update(investigation_id, cursor_agent_id=event.name)
+            if event.type == "status" and "cursor.com/agents/" in (event.text or ""):
+                current = STORE.get(investigation_id)
+                if current is not None and not current.cursor_run_url:
+                    STORE.update(investigation_id, cursor_run_url=event.text)
             if event.type == "rca" and event.rca is not None:
                 rca = enrich_rca_with_argocd(event.rca, brief)
                 if screenshot_url:

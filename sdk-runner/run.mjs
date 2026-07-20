@@ -77,7 +77,19 @@ try {
       ? { local: { cwd: localCwd } }
       : { cloud: { repos: [{ url: repoUrl, startingRef: ref }], autoCreatePR: false } }),
   });
-  emit({ type: "status", status: `launched (${runtime})`, text: agent?.url ?? "" });
+  // Cloud agents expose a web run URL at cursor.com/agents/<id>; the SDKAgent
+  // returned by Agent.create() only carries `agentId`, so derive the URL from it
+  // (local runs have no cloud web page — leave the URL empty there).
+  const agentId = agent?.agentId ?? agent?.id ?? "";
+  const agentUrl =
+    agent?.url ??
+    (runtime === "cloud" && agentId ? `https://cursor.com/agents/${agentId}` : "");
+  emit({
+    type: "status",
+    status: `launched (${runtime})`,
+    text: agentUrl,
+    name: agentId || undefined,
+  });
 
   const run = await agent.send(prompt);
 

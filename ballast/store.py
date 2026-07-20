@@ -70,6 +70,7 @@ class InvestigationRecord(BaseModel):
     artifact_names: list[str] = []
     chat_messages: list[ChatMessage] = []
     cursor_agent_id: str | None = None
+    cursor_run_url: str | None = None
     chat_agent_id: str | None = None
     remediation_status: str | None = None
     remediation_queued_at: str | None = None
